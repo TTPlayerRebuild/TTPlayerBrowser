@@ -1,0 +1,9 @@
+/build/
+/out/
+/tests/out/
+/*.log
+/artifact/
+/downloads-ui/
+/CMakeUserPresets.json
+__pycache__/
+*.pyc

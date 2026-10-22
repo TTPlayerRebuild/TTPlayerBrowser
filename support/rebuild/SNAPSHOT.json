@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-22",
+  "files": [
+    {
+      "path": "src/audio/legacy_cache.cpp",
+      "source": "rebuild/src/audio/legacy_cache.cpp",
+      "sha256": "d8cc83a11b1e4e91906b23c0850b8819ec7b0074311e0ef7ca9714055b158377"
+    },
+    {
+      "path": "src/core/text.cpp",
+      "source": "rebuild/src/core/text.cpp",
+      "sha256": "f7d49c17e86778a0a5149aa53d3183f38defc7b8f0ad1333e4799ee2163eada4"
+    },
+    {
+      "path": "src/skin/skin_package.cpp",
+      "source": "rebuild/src/skin/skin_package.cpp",
+      "sha256": "23d9adeba2e5efa3e451291e497ffc0c8fc12b58ba4fc07e6dc5c96b15fa3e91"
+    },
+    {
+      "path": "include/ttplayer/audio/http_download_queue.h",
+      "source": "rebuild/include/ttplayer/audio/http_download_queue.h",
+      "sha256": "6233c9ff34709b643edf8ce0b371e58d42d3600653b8da0949fde933c4f7014c"
+    },
+    {
+      "path": "include/ttplayer/core/text.h",
+      "source": "rebuild/include/ttplayer/core/text.h",
+      "sha256": "986f89225f95288819f7692969699cfcc194e6341815103270a0a036718219e3"
+    },
+    {
+      "path": "include/ttplayer/skin/skin_package.h",
+      "source": "rebuild/include/ttplayer/skin/skin_package.h",
+      "sha256": "10d6642645872a1cd16098ac5451bffdc3d4a7607eb3d782fee69944587dc41d"
+    },
+    {
+      "path": "third_party/ttpcomm-sdk/include/ttpcomm/text.h",
+      "source": "rebuild/third_party/ttpcomm-sdk/include/ttpcomm/text.h",
+      "sha256": "c1e6ad165e0f5ed0674dad794059b55fc5e8faf777949d9a7005002ff00344b8"
+    },
+    {
+      "path": "third_party/ttpcomm-sdk/include/ttpcomm/zip.h",
+      "source": "rebuild/third_party/ttpcomm-sdk/include/ttpcomm/zip.h",
+      "sha256": "582bb1e72eb0a37a4df7755cc0bd638a6b4588f69e5d09361977408eb21d951e"
+    },
+    {
+      "path": "third_party/ttpcomm-sdk/include/ttpcomm/bytes.h",
+      "source": "rebuild/third_party/ttpcomm-sdk/include/ttpcomm/bytes.h",
+      "sha256": "69f64e7124e8d517b2ecd6d3ebdde129eb56ab1e1729225087187e16410da178"
+    },
+    {
+      "path": "third_party/ttpcomm-sdk/include/ttpcomm_api.h",
+      "source": "rebuild/third_party/ttpcomm-sdk/include/ttpcomm_api.h",
+      "sha256": "1e466827eeb39a19d1743c58f286e7d487146b4b5e26c95e630bef5c7e35ec7f"
+    },
+    {
+      "path": "src/app/ttplayer.manifest",
+      "source": "rebuild/src/app/ttplayer.manifest",
+      "sha256": "6c7b2bd5b3773981c73c8548a9984524b5c8e3dfcd3ee18448c1f88df03cbe8e"
+    }
+  ]
+}

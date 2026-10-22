@@ -1,0 +1,3 @@
+LIBRARY ttpbrowser
+EXPORTS
+    ttp_browser_get_api=_ttp_browser_get_api@4
