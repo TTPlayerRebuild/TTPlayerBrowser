@@ -1,4 +1,5 @@
 #include "ttpbrowser.h"
+#include "skin_render_probe.h"
 #include <commctrl.h>
 #include <shlwapi.h>
 #include <algorithm>
@@ -58,6 +59,58 @@ HRESULT Invoke(IDispatch* object,const wchar_t* name,std::vector<VARIANT> argume
     args.rgvarg=arguments.data();args.cArgs=static_cast<UINT>(arguments.size());
     if(SUCCEEDED(hr))hr=object->Invoke(id,IID_NULL,LOCALE_USER_DEFAULT,flags,&args,result,nullptr,nullptr);
     for(auto& a:arguments)VariantClear(&a);return hr;
+}
+void CheckBackgroundPatches(const ttp_browser_api* api,void* instance) {
+    constexpr int width=320,height=240;
+    const HWND window=api->window(instance);
+    BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth=width;info.bmiHeader.biHeight=-height;
+    info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+    void* raw{};HBITMAP bitmap=CreateDIBSection(nullptr,&info,DIB_RGB_COLORS,&raw,nullptr,0);
+    Check(bitmap && raw,"allocate pixel-identified background fixture");
+    if(!bitmap || !raw){if(bitmap)DeleteObject(bitmap);return;}
+    auto* pixels=static_cast<DWORD*>(raw);
+    for(int y=0;y<height;++y)for(int x=0;x<width;++x)
+        pixels[y*width+x]=((x%251+1)<<16)|((y%251+1)<<8)|0x55;
+    ttp_browser_skin skin{};skin.size=sizeof(skin);skin.valid=TRUE;
+    skin.background=bitmap;skin.background_size={width,height};
+    skin.transparent_color=RGB(255,0,255);skin.content={12,32,308,214};
+    const auto verify=[&](SIZE destination,RECT patch,bool tile,const char* label){
+        SetWindowPos(window,nullptr,0,0,destination.cx,destination.cy,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        const auto rendered=ttpbrowser::testing::RenderClient(window);
+        const auto sample=[&](int position,int total,int original,int low,int high){
+            if(position<low)return position;
+            if(position>=total-(original-high))return position-(total-original);
+            return tile?low+(position-low)%(high-low):low;
+        };
+        bool same=rendered.pixels.size()==static_cast<size_t>(destination.cx)*destination.cy;
+        for(int y=0;same && y<destination.cy;++y)for(int x=0;x<destination.cx;++x){
+            const int sx=sample(x,destination.cx,width,patch.left,patch.right);
+            const int sy=sample(y,destination.cy,height,patch.top,patch.bottom);
+            if((rendered.pixels[y*destination.cx+x]&0xffffff)!=pixels[sy*width+sx]){same=false;break;}
+        }
+        Check(same,label);
+    };
+    Check(SUCCEEDED(api->set_skin(instance,&skin)),"install legacy skin without resize_rect");
+    for(const SIZE destination : {SIZE{480,360},SIZE{581,443},SIZE{320,360},SIZE{480,240},SIZE{320,240}})
+        verify(destination,{160,120,161,121},false,"implicit nine-patch preserves every fixed pixel across horizontal/vertical resizing");
+    skin.resize_rect={width+4,height+4,width+8,height+8};
+    Check(SUCCEEDED(api->set_skin(instance,&skin)),"install out-of-image resize rectangle");
+    verify({480,360},{160,120,161,121},false,"invalid resize rectangle uses bounded center-band fallback");
+    skin.resize_rect={17,29,291,211};skin.resize_tile=TRUE;
+    Check(SUCCEEDED(api->set_skin(instance,&skin)),"install explicit tiled nine-patch");
+    verify({487,363},skin.resize_rect,true,"explicit tile repeats native pixels and clips partial final tiles");
+    // Solid stretch cells make the expected result independent of GDI's
+    // nearest-neighbour sampling convention; corners keep unique pixel IDs.
+    for(int y=0;y<height;++y)for(int x=0;x<width;++x){
+        const int column=x<17?0:x<291?1:2,row=y<29?0:y<211?1:2;
+        if(column==1 || row==1)pixels[y*width+x]=0x105020+column*0x200000+row*0x003000;
+    }
+    skin.resize_tile=FALSE;
+    Check(SUCCEEDED(api->set_skin(instance,&skin)),"install explicit stretched nine-patch");
+    verify({487,363},skin.resize_rect,false,"explicit stretch preserves corners and expands only selected bands");
+    verify({300,220},skin.resize_rect,false,"size below source bitmap still uses fixed nine-patch borders");
+    DeleteObject(bitmap);
 }
 void CheckBorderlessWindow(const ttp_browser_api* api,void* instance,Host& host) {
     const HWND window=api->window(instance);
@@ -268,6 +321,7 @@ int wmain(int argc,wchar_t** argv) {
     Check(tooltip && SendMessageW(tooltip,TTM_GETTOOLINFOW,0,reinterpret_cast<LPARAM>(&after_tool)) &&
         std::wstring(after_text)==L"关闭" && after_tool.rect.left>before_tool.rect.left &&
         SendMessageW(tooltip,TTM_GETTOOLCOUNT,0,0)==TTP_BROWSER_CONTROL_COUNT,"resize updates tooltip bounds without changing text or duplicating tools");
+    CheckBackgroundPatches(api,instance);
     CheckBorderlessWindow(api,instance,h);
     ttp_browser_state ws{sizeof(ws)};Check(SUCCEEDED(api->get_state(instance,&ws)) &&
         (ws.flags&TTP_BROWSER_STATE_VISIBLE) && (ws.flags&TTP_BROWSER_STATE_DOWNLOADS),"view state reflects download tab");

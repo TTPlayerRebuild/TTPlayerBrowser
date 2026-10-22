@@ -30,20 +30,31 @@ void DrawBackground(HDC target, const ttp_browser_skin& skin, int width, int hei
     const auto size = skin.background_size;
     if (!skin.background || size.cx <= 0 || size.cy <= 0 || width <= 0 || height <= 0) return;
     RECT resize = skin.resize_rect;
-    if (IsRectEmpty(&resize) || width < size.cx || height < size.cy) {
-        DrawBitmap(target, skin.background, {0,0,width,height}, {0,0,size.cx,size.cy}, skin.transparent_color, false); return;
-    }
     resize.left = std::clamp<LONG>(resize.left, 0, size.cx);
     resize.top = std::clamp<LONG>(resize.top, 0, size.cy);
     resize.right = std::clamp<LONG>(resize.right, resize.left, size.cx);
     resize.bottom = std::clamp<LONG>(resize.bottom, resize.top, size.cy);
+    if (IsRectEmpty(&resize)) {
+        // Legacy browser_window descriptors (including Default_Skin) omit
+        // resize_rect. Expand a central pixel band instead of scaling their
+        // frame, rounded corners and toolbar/footer artwork with the window.
+        resize = {size.cx/2, size.cy/2, size.cx/2+1, size.cy/2+1};
+    }
     const int source_x[]{0,resize.left,resize.right,size.cx}, source_y[]{0,resize.top,resize.bottom,size.cy};
-    const int destination_x[]{0,resize.left,width-(size.cx-resize.right),width};
-    const int destination_y[]{0,resize.top,height-(size.cy-resize.bottom),height};
+    const int left=std::min<int>(resize.left,width),top=std::min<int>(resize.top,height);
+    const int destination_x[]{0,left,std::max<int>(left,width-(size.cx-resize.right)),width};
+    const int destination_y[]{0,top,std::max<int>(top,height-(size.cy-resize.bottom)),height};
     HDC source = CreateCompatibleDC(target); const auto previous = SelectObject(source,skin.background);
+    const int stretch_mode=SetStretchBltMode(target,COLORONCOLOR);
     for (int row=0;row<3;++row) for (int column=0;column<3;++column) {
-        const RECT from{source_x[column],source_y[row],source_x[column+1],source_y[row+1]};
+        RECT from{source_x[column],source_y[row],source_x[column+1],source_y[row+1]};
         const RECT to{destination_x[column],destination_y[row],destination_x[column+1],destination_y[row+1]};
+        // A programmatic size smaller than the fixed margins crops artwork at
+        // its inner edge; it must not reintroduce whole-frame scaling.
+        if(column==0)from.right=from.left+(to.right-to.left);
+        if(column==2)from.left=from.right-(to.right-to.left);
+        if(row==0)from.bottom=from.top+(to.bottom-to.top);
+        if(row==2)from.top=from.bottom-(to.bottom-to.top);
         const int sw=from.right-from.left,sh=from.bottom-from.top,dw=to.right-to.left,dh=to.bottom-to.top;
         if (sw<=0 || sh<=0 || dw<=0 || dh<=0) continue;
         if (skin.resize_tile && (row==1 || column==1)) {
@@ -51,8 +62,10 @@ void DrawBackground(HDC target, const ttp_browser_skin& skin, int width, int hei
             for (int y=to.top;y<to.bottom;y+=sh) for (int x=to.left;x<to.right;x+=sw)
                 BitBlt(target,x,y,sw,sh,source,from.left,from.top,SRCCOPY);
             RestoreDC(target,saved);
-        } else StretchBlt(target,to.left,to.top,dw,dh,source,from.left,from.top,sw,sh,SRCCOPY);
+        } else if(sw==dw && sh==dh) BitBlt(target,to.left,to.top,dw,dh,source,from.left,from.top,SRCCOPY);
+        else StretchBlt(target,to.left,to.top,dw,dh,source,from.left,from.top,sw,sh,SRCCOPY);
     }
+    if(stretch_mode)SetStretchBltMode(target,stretch_mode);
     SelectObject(source,previous); DeleteDC(source);
 }
 HRGN SkinRegion(const ttp_browser_skin& skin, SIZE size, RECT content) {
@@ -569,8 +582,10 @@ void BrowserWindow::Activate(int id) {
         break;
     }
 }
-void BrowserWindow::Paint() {
-    PAINTSTRUCT paint{}; HDC screen = BeginPaint(window_, &paint); RECT client{}; GetClientRect(window_, &client);
+void BrowserWindow::Paint(HDC screen) {
+    PAINTSTRUCT paint{}; const bool painting=screen==nullptr;
+    if(painting)screen=BeginPaint(window_, &paint);
+    RECT client{}; GetClientRect(window_, &client);
     HDC dc = CreateCompatibleDC(screen); HBITMAP buffer = CreateCompatibleBitmap(screen, std::max(1L, client.right), std::max(1L, client.bottom));
     auto old_bitmap = SelectObject(dc, buffer); auto old_font = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
     FillRect(dc, &client, reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1)); SetBkMode(dc, TRANSPARENT);
@@ -613,7 +628,8 @@ void BrowserWindow::Paint() {
         }
     }
     BitBlt(screen, 0,0,client.right,client.bottom,dc,0,0,SRCCOPY);
-    SelectObject(dc, old_font); SelectObject(dc, old_bitmap); DeleteObject(buffer); DeleteDC(dc); EndPaint(window_, &paint);
+    SelectObject(dc, old_font); SelectObject(dc, old_bitmap); DeleteObject(buffer); DeleteDC(dc);
+    if(painting)EndPaint(window_, &paint);
 }
 BOOL BrowserWindow::Translate(MSG* message) {
     if (!message || !window_ || !IsWindowVisible(window_) ||
@@ -656,6 +672,7 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     case WM_CLOSE: self->Show(TTP_BROWSER_VIEW_HIDE); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: self->Paint(); return 0;
+    case WM_PRINTCLIENT: if(wp)self->Paint(reinterpret_cast<HDC>(wp));return 0;
     case WM_GETMINMAXINFO: { auto* limits=reinterpret_cast<MINMAXINFO*>(lp);const auto minimum=self->MinimumSize();
         limits->ptMinTrackSize={minimum.cx,minimum.cy};return 0; }
     case WM_NCHITTEST: return HTCLIENT;

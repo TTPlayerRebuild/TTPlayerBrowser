@@ -53,7 +53,7 @@ private:
     HRESULT EnsureWindow();
     HRESULT StartBrowser(bool force_ie = false);
     void Layout();
-    void Paint();
+    void Paint(HDC target = nullptr);
     void Activate(int);
     void SwitchView(bool);
     void StateChanged();

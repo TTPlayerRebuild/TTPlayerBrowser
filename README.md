@@ -31,4 +31,5 @@ GitHub Actions 与其它插件保持相同用法：手动运行 **Build TTPlayer
 - [启动闪退修复](docs/STARTUP_FIX.zh-CN.md)
 - [外围绘制与下载界面修复](docs/UI_FIX.zh-CN.md)
 - [音乐窗吸附分析与修复](docs/SNAP_FIX.zh-CN.md)
+- [音乐窗九宫格拉伸修复](docs/NINE_PATCH_FIX.zh-CN.md)
 - [第三方声明](docs/licenses/)

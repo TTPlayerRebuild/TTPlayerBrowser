@@ -5,6 +5,7 @@
 #include "ttplayer/ui/window_drag.h"
 #include "player_window_internal.h"
 #include "track_metadata.h"
+#include "skin_render_probe.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +18,29 @@ struct SkinRebindAccess {
         if (!value) throw std::runtime_error(message);
     }
     static INT_PTR CALLBACK EmptyDialog(HWND, UINT, WPARAM, LPARAM) { return FALSE; }
+    static void CheckBrowserSkinResize(ui::PlayerWindow& player) {
+        const auto& skin=player.skin_->Browser();
+        Require(skin.valid && IsRectEmpty(&skin.resize_rect),"default skin must exercise missing resize_rect");
+        const HWND window=player.MusicBrowserWindow();
+        const LONG width=skin.background.size.cx,height=skin.background.size.cy;
+        RECT saved{};GetWindowRect(window,&saved);
+        SetWindowPos(window,nullptr,0,0,width,height,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        const auto before=ttpbrowser::testing::RenderClient(window);
+        SetWindowPos(window,nullptr,0,0,width+173,height+117,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        const auto after=ttpbrowser::testing::RenderClient(window);
+        SetWindowPos(window,nullptr,saved.left,saved.top,saved.right-saved.left,saved.bottom-saved.top,
+            SWP_NOZORDER|SWP_NOACTIVATE);
+        Require(!before.pixels.empty() && !after.pixels.empty(),"cannot render default browser background");
+        // Compare outer corner strips from the actual resource skin, including
+        // the rounded outline. This fails when the full image is scaled.
+        for(int corner=0;corner<4;++corner)for(int y=0;y<3;++y)for(int x=0;x<32;++x){
+            const int bx=corner&1?width-1-x:x,by=corner&2?height-1-y:y;
+            const int ax=corner&1?after.width-1-x:x,ay=corner&2?after.height-1-y:y;
+            Require((before.pixels[by*width+bx]&0xffffff)==(after.pixels[ay*after.width+ax]&0xffffff),
+                "default browser frame corner pixels changed on resize");
+        }
+        std::cout << "default browser skin: fixed corner pixels survive resize without resize_rect PASS\n";
+    }
     static void CheckBrowserDocking(ui::PlayerWindow& player) {
         using namespace ui::detail;
         const HWND browser = player.MusicBrowserWindow();
@@ -318,6 +342,7 @@ struct SkinRebindAccess {
                 if (player.lyric_window_) ShowWindow(player.lyric_window_, SW_HIDE);
                 Require(player.MusicBrowserWindow() && IsWindowVisible(player.MusicBrowserWindow()),
                         "present module did not create downloads window");
+                CheckBrowserSkinResize(player);
                 CheckBrowserDocking(player);
                 SetWindowPos(player.MusicBrowserWindow(), HWND_TOP, 600, 200, 0, 0,
                              SWP_NOSIZE | SWP_NOACTIVATE);
