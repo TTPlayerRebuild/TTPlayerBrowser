@@ -1,6 +1,6 @@
 # TTPlayer 重建版音乐窗 / ttpbrowser.dll
 
-实现与验证日期：2026-10-22
+实现与验证日期：2026-10-27
 
 ## 用途与部署
 
@@ -59,13 +59,16 @@ IE 无法在 GetExternal 精确区分帧，因此另外拦截不受信任的子�
 
 DLL：TTPlayer_BrowserWnd、浏览器后端、前进/后退/刷新、音乐/下载标签、链接、
 启动复选框、皮肤按钮/字体/透明色/九宫格缩放、错误面板/重试、脚本 IDispatch、
-推荐歌曲菜单、原版资源下载列表、队列、worker、并发控制、暂停/开始/移除、任务持久化。
+原版资源下载列表、队列、worker、并发控制、暂停/开始/移除、任务持久化。
 下载列表持久化位置沿用设置目录下 HttpDownloads/cachelist.xml；旧缓存列表导入保留为内部迁移接口。
-移除任务/删除记录保留已下载文件；“删除文件”需在界面确认。接收推荐歌曲服从原 Network 的相应设置。
+移除任务/删除记录保留已下载文件；“删除文件”交给 Shell 请求可撤销删除，并可选择同时删除主程序明确关联的歌词。
+按用户要求不实现“每周推荐”列表，也不提供外框推荐菜单。
+窗口边框及皮肤空白右键提供“音乐窗”“下载管理”两项，勾选当前页面；这项是用户指定的新增交互。
 下载页沿用原版顶部设置、80px分类栏、自绘表头/进度和右键菜单；没有额外底部工具栏。
 音乐窗去掉系统缩放框，使用皮肤窗口区域及客户区拖动/八方向缩放。修复依据与边界见 [UI_FIX.zh-CN.md](UI_FIX.zh-CN.md)。
 背景按九宫格拉伸或平铺；默认皮肤缺少 `resize_rect` 时使用中心像素带，保留边角尺寸，详见 [NINE_PATCH_FIX.zh-CN.md](NINE_PATCH_FIX.zh-CN.md)。
 音乐窗通过宿主回调共用吸附开关、距离与面板登记表，支持工作区及其他面板的移动/缩放磁吸；主窗可带动相连音乐窗。此功能需同时更新 EXE 和 DLL，详见 [SNAP_FIX.zh-CN.md](SNAP_FIX.zh-CN.md)。
+右键、单击/双击、链接、选择、滚动与分隔条的原版对照见 [MOUSE_BEHAVIOR_ANALYSIS.zh-CN.md](MOUSE_BEHAVIOR_ANALYSIS.zh-CN.md)；后续已实施的修正、验证及剩余边界见 [MOUSE_BEHAVIOR_FIX.zh-CN.md](MOUSE_BEHAVIOR_FIX.zh-CN.md)。
 
 EXE：可选 DLL 加载、皮肤参数快照、窗口状态保存、现有播放列表/播放引擎、
 现有 HTTP IStream 生产者和网络配置。DLL 通过 open_stream 回调消费 IStream，
@@ -76,7 +79,8 @@ Tid 写入曲目 metadata 的 TTPlayer.Tid 键，后续读信息/刷新保留该
 ## 恢复的脚本接口
 
 外层：ttplayer/ttplayer2/ttplayer3/ttplayer4/ttplayer5/ttplayer6 属性、
-AddRecomdSound(source, artist, title)、ClearRecomdList()。
+AddRecomdSound(source, artist, title)、ClearRecomdList()。后两项仅保留调用兼容：
+合法添加返回 S_FALSE，清空返回 S_OK，不创建列表、弹出菜单或提交播放。
 内层 15 项：
 
 ```text
@@ -92,10 +96,12 @@ GetPlayerInfo(1) 返回兼容版本 5.7.9，(2) 返回 0；GetCacheInfo 保留�
 
 ## 明确的重建设计与边界
 
-推荐歌曲显示在 DLL 的独立菜单中，由用户选取后提交播放；未声称逐字节复制原版内部列表。
+不实现“每周推荐”列表；旧脚本调用不会改变现有播放列表。
 mode0 选择目标播放列表，mode1 映射当前插入上下文/末尾追加，mode2 控制播放。
-原生播放器内部所有列表分支尚未逐一动态复现，依据见 HOST_IMPLEMENTATION.txt。
+原生播放器内部所有列表分支尚未逐一动态复现，依据见 ../../reverse/music-window-5790/HOST_IMPLEMENTATION.txt。
 AddBrowserHyper 对 URL/标题参数提供双顺序容错，这是重建策略，不是原版版本差异证据。
+多次 AddBrowserHyper 追加底部轮播链接；ClearBrowserHyper 恢复默认“千千静听使用技巧”。
+链接按文字命中、下划线和手形显示，悬停及按住时暂停，释放点击后交给 Shell 外部打开。
 DownSetupPack 进入现有受控更新流程，不执行网页指定的任意程序、URL 或命令行。
 本地桥传入 HTTP(S) 媒体源；不能凭 Tid 自动恢复未取得的旧服务器解析协议。
 
@@ -120,6 +126,7 @@ src/webview_backend.cpp         WebView2、旧接口兼容脚本
 src/ie_backend.cpp              IE/MSHTML + ATL 后备宿主
 src/downloads.cpp               下载子视图与配置
 src/downloads_ui.inc            原版布局、绘制与下载交互
+src/download_file_actions.cpp   Shell 删除与可选歌词关联
 src/download_skin.cpp           从宿主资源读取原版下载皮肤
 src/http_download_queue.cpp     队列、持久化、下载/预取 worker
 ../../rebuild/src/ui/browser_client.cpp       EXE 可选加载与流回调
@@ -136,7 +143,7 @@ src/http_download_queue.cpp     队列、持久化、下载/预取 worker
 
 ```text
 cmake -S rebuild -B rebuild/build -DTTPLAYER_BUILD_BROWSER=ON -DTTPBROWSER_BUILD_TESTS=ON
-cmake --build rebuild/build --config Release --target ttplayer_rebuild ttpbrowser_contract_tests ttpbrowser_runtime_tests ttpbrowser_download_tests ttpbrowser_host_tests -j 4
+cmake --build rebuild/build --config Release --target ttplayer_rebuild ttpbrowser_contract_tests ttpbrowser_runtime_tests ttpbrowser_download_tests ttpbrowser_mouse_contract_tests ttpbrowser_file_actions_tests ttpbrowser_download_mouse_state_tests ttpbrowser_host_tests -j 4
 ctest --test-dir rebuild/build/ttpbrowser -C Release --output-on-failure
 python ttpbrowser/tests/run_runtime_tests.py rebuild/build/ttpbrowser/Release --output ttpbrowser/out/runtime-check
 python ttpbrowser/tests/run_host_tests.py rebuild/build --output ttpbrowser/out/host-check-new

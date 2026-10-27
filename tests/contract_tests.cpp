@@ -60,6 +60,81 @@ HRESULT Invoke(IDispatch* object,const wchar_t* name,std::vector<VARIANT> argume
     if(SUCCEEDED(hr))hr=object->Invoke(id,IID_NULL,LOCALE_USER_DEFAULT,flags,&args,result,nullptr,nullptr);
     for(auto& a:arguments)VariantClear(&a);return hr;
 }
+void CheckLinkState(HWND browser,HWND tooltip,IDispatch* inner,Host& host) {
+    Check(browser && tooltip && inner,"link state fixture has a real DLL window, chrome tooltip and legacy dispatch");
+    if(!browser || !tooltip || !inner)return;
+    const auto submissions=host.submits,opens=host.opens.load();
+    // Read the same callback text requested by the chrome tooltip. This asks
+    // about the displayed item without clicking a Shell-opening hyperlink.
+    const auto title=[&]{
+        NMTTDISPINFOW information{};information.hdr.hwndFrom=tooltip;
+        information.hdr.idFrom=TTP_BROWSER_LINK+1;information.hdr.code=TTN_GETDISPINFOW;
+        SendMessageW(browser,WM_NOTIFY,information.hdr.idFrom,reinterpret_cast<LPARAM>(&information));
+        return information.lpszText?std::wstring(information.lpszText):std::wstring{};
+    };
+    const auto bounds=[&](RECT& rect){
+        TOOLINFOW tool{sizeof(tool)};tool.hwnd=browser;tool.uId=TTP_BROWSER_LINK+1;
+        const bool found=SendMessageW(tooltip,TTM_GETTOOLINFOW,0,reinterpret_cast<LPARAM>(&tool))!=FALSE;
+        rect=tool.rect;return found;
+    };
+    constexpr WPARAM link_timer=102;
+    const auto advance=[&](const wchar_t* next){
+        // Each message is one production 40 ms animation tick. Direct messages
+        // avoid wall-clock sleeps and never move the user's physical cursor.
+        SendMessageW(browser,WM_MOUSELEAVE,0,0);
+        for(unsigned tick=0;tick<256;++tick){
+            SendMessageW(browser,WM_TIMER,link_timer,0);if(title()==next)return true;
+        }
+        return false;
+    };
+    Check(SUCCEEDED(Invoke(inner,L"ClearBrowserHyper")),"clear prior hyperlink state before carousel fixture");Pump();
+    Check(SUCCEEDED(Invoke(inner,L"AddBrowserHyper",{Text(L"first"),Text(L"http://fixture.invalid/first")})),
+        "add first hyperlink without navigating");Pump();
+    Check(title()==L"first","first hyperlink becomes the displayed item");
+    Check(SUCCEEDED(Invoke(inner,L"AddBrowserHyper",{Text(L"second"),Text(L"http://fixture.invalid/second")})),
+        "append second hyperlink without navigating");Pump();
+    Check(title()==L"first","adding a second hyperlink preserves the first displayed item rather than replacing it");
+    RECT first{};const bool have_bounds=bounds(first);
+    HDC dc=GetDC(browser);SIZE text{};LOGFONTW font{};
+    GetObjectW(GetStockObject(DEFAULT_GUI_FONT),sizeof(font),&font);font.lfUnderline=TRUE;
+    const HFONT measured_font=CreateFontIndirectW(&font);
+    if(dc){const auto old=SelectObject(dc,measured_font?measured_font:GetStockObject(DEFAULT_GUI_FONT));
+        GetTextExtentPoint32W(dc,L"first",5,&text);SelectObject(dc,old);ReleaseDC(browser,dc);}
+    if(measured_font)DeleteObject(measured_font);
+    RECT client{};GetClientRect(browser,&client);
+    Check(have_bounds && text.cx>0 && first.right-first.left==text.cx && first.right==client.right-10 &&
+        first.right-first.left<220,"hyperlink tooltip hit rectangle matches actual text width inside the reserved footer area");
+    SendMessageW(browser,WM_MOUSELEAVE,0,0);
+    Check(title()==L"first" && advance(L"second"),"timer ticks advance from first hyperlink to appended second hyperlink");
+    Check(title()==L"second" && advance(L"first"),"hyperlink carousel retains and cycles back to the first item");
+
+    RECT current{};const bool have_current=bounds(current) && !IsRectEmpty(&current);
+    Check(have_current,"current hyperlink retains a nonempty hit rectangle");
+    if(have_current){
+        const POINT point{(current.left+current.right)/2,(current.top+current.bottom)/2};
+        const auto before_hover=title();
+        SendMessageW(browser,WM_MOUSEMOVE,0,MAKELPARAM(point.x,point.y));
+        for(unsigned tick=0;tick<256;++tick)SendMessageW(browser,WM_TIMER,link_timer,0);
+        Check(title()==before_hover,"hovering a hyperlink pauses carousel selection");
+        SendMessageW(browser,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(point.x,point.y));
+        SendMessageW(browser,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(current.left-20,point.y));
+        for(unsigned tick=0;tick<256;++tick)SendMessageW(browser,WM_TIMER,link_timer,0);
+        Check(GetCapture()==browser && title()==before_hover,
+            "pressing a hyperlink and dragging outside keeps its target fixed throughout capture");
+        // Never issue LBUTTONUP: it could execute ShellExecute on a regression.
+        SendMessageW(browser,WM_CANCELMODE,0,0);
+        Check(GetCapture()!=browser,"canceling a hyperlink press releases capture without opening its target");
+        SendMessageW(browser,WM_MOUSELEAVE,0,0);
+        const auto next=before_hover==L"first"?L"second":L"first";
+        Check(advance(next),"carousel advances again after a dragged hyperlink press is canceled");
+    }
+    Check(SUCCEEDED(Invoke(inner,L"ClearBrowserHyper")),"clear all appended hyperlinks");Pump();
+    Check(title()==L"千千静听使用技巧","clearing hyperlinks restores the default help title");
+    SendMessageW(browser,WM_MOUSELEAVE,0,0);
+    for(unsigned tick=0;tick<256;++tick)SendMessageW(browser,WM_TIMER,link_timer,0);
+    Check(title()==L"千千静听使用技巧","cleared carousel never returns a removed hyperlink");
+    Check(host.submits==submissions && host.opens.load()==opens,"link state probes neither submit playback nor open a media stream");
+}
 void CheckBackgroundPatches(const ttp_browser_api* api,void* instance) {
     constexpr int width=320,height=240;
     const HWND window=api->window(instance);
@@ -305,7 +380,12 @@ int wmain(int argc,wchar_t** argv) {
     Check(SUCCEEDED(api->show(instance,TTP_BROWSER_VIEW_DOWNLOADS)),"embedded download view opens without navigating music homepage");
     const HWND browser=api->window(instance);
     HWND tooltip=FindWindowExW(nullptr,nullptr,TOOLTIPS_CLASSW,nullptr);
-    while(tooltip && GetWindow(tooltip,GW_OWNER)!=browser)tooltip=FindWindowExW(nullptr,tooltip,TOOLTIPS_CLASSW,nullptr);
+    // A popup tooltip created for a download child also has the top-level
+    // browser as its Win32 owner. Identify the actual chrome tool, not merely
+    // the first tooltip with that owner.
+    while(tooltip){TOOLINFOW candidate{sizeof(candidate)};candidate.hwnd=browser;candidate.uId=TTP_BROWSER_CLOSE+1;
+        if(GetWindow(tooltip,GW_OWNER)==browser && SendMessageW(tooltip,TTM_GETTOOLINFOW,0,reinterpret_cast<LPARAM>(&candidate)))break;
+        tooltip=FindWindowExW(nullptr,tooltip,TOOLTIPS_CLASSW,nullptr);}
     Check(tooltip && SendMessageW(tooltip,TTM_GETTOOLCOUNT,0,0)==TTP_BROWSER_CONTROL_COUNT,"all browser buttons retain tooltip registration");
     wchar_t before_text[128]{};TOOLINFOW before_tool{sizeof(before_tool)};
     before_tool.hwnd=browser;before_tool.uId=TTP_BROWSER_CLOSE+1;before_tool.lpszText=before_text;
@@ -321,6 +401,7 @@ int wmain(int argc,wchar_t** argv) {
     Check(tooltip && SendMessageW(tooltip,TTM_GETTOOLINFOW,0,reinterpret_cast<LPARAM>(&after_tool)) &&
         std::wstring(after_text)==L"关闭" && after_tool.rect.left>before_tool.rect.left &&
         SendMessageW(tooltip,TTM_GETTOOLCOUNT,0,0)==TTP_BROWSER_CONTROL_COUNT,"resize updates tooltip bounds without changing text or duplicating tools");
+    CheckLinkState(browser,tooltip,inner,h);
     CheckBackgroundPatches(api,instance);
     CheckBorderlessWindow(api,instance,h);
     ttp_browser_state ws{sizeof(ws)};Check(SUCCEEDED(api->get_state(instance,&ws)) &&

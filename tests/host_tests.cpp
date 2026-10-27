@@ -18,6 +18,45 @@ struct SkinRebindAccess {
         if (!value) throw std::runtime_error(message);
     }
     static INT_PTR CALLBACK EmptyDialog(HWND, UINT, WPARAM, LPARAM) { return FALSE; }
+    static void CheckBrowserLyricAssociation(ui::PlayerWindow& player, const std::filesystem::path& runtime) {
+        const auto folder = runtime / L"LyricAssociationProbe";
+        std::filesystem::create_directories(folder);
+        const auto media = folder / L"song.mp3";
+        const auto guessed = folder / L"song.lrc";
+        const auto associated = folder / L"explicit-association.lrc";
+        for (const auto& path : {media, guessed, associated}) std::ofstream(path, std::ios::binary) << "fixture";
+        player.EnsureLyricAssociationsLoaded();
+        const auto previous = player.lyric_associations_;
+        const auto query = [&](const std::filesystem::path& path, std::wstring& text) {
+            BSTR value{};
+            const HRESULT result = player.BrowserResolveAssociatedLyricCallback(&player, path.c_str(), &value);
+            text = value ? std::wstring(value, SysStringLen(value)) : std::wstring{};
+            SysFreeString(value);
+            return result;
+        };
+        try {
+            player.lyric_associations_.Erase({media, 0});
+            std::wstring text;
+            Require(query(media, text) == S_FALSE && text.empty(),
+                "browser file deletion guessed an unassociated same-name lyric");
+            player.lyric_associations_.Set({media, 0}, associated);
+            Require(query(media, text) == S_OK && text == associated.wstring(),
+                "browser did not resolve the exact persisted lyric association");
+            player.lyric_associations_.Set({media, 0}, lyrics::kNoLyric);
+            Require(query(media, text) == S_FALSE && text.empty(),
+                "browser lyric resolution ignored the explicit NoLyric sentinel");
+            player.lyric_associations_.Set({media, 0}, folder / L"stale.lrc");
+            Require(query(media, text) == S_FALSE && text.empty(),
+                "browser lyric resolution substituted a guessed path for a stale association");
+            player.lyric_associations_.Set({folder / L"missing.mp3", 0}, associated);
+            Require(query(folder / L"missing.mp3", text) == S_FALSE && text.empty(),
+                "missing downloaded media could delete an associated lyric by itself");
+            Require(player.BrowserResolveAssociatedLyricCallback(&player, media.c_str(), nullptr) == E_POINTER,
+                "browser lyric callback accepted a null output pointer");
+        } catch (...) { player.lyric_associations_ = previous; throw; }
+        player.lyric_associations_ = previous;
+        std::cout << "browser associated lyrics: exact association, NoLyric, stale/missing records, no guessed file PASS\n";
+    }
     static void CheckBrowserSkinResize(ui::PlayerWindow& player) {
         const auto& skin=player.skin_->Browser();
         Require(skin.valid && IsRectEmpty(&skin.resize_rect),"default skin must exercise missing resize_rect");
@@ -342,6 +381,7 @@ struct SkinRebindAccess {
                 if (player.lyric_window_) ShowWindow(player.lyric_window_, SW_HIDE);
                 Require(player.MusicBrowserWindow() && IsWindowVisible(player.MusicBrowserWindow()),
                         "present module did not create downloads window");
+                CheckBrowserLyricAssociation(player, runtime);
                 CheckBrowserSkinResize(player);
                 CheckBrowserDocking(player);
                 SetWindowPos(player.MusicBrowserWindow(), HWND_TOP, 600, 200, 0, 0,

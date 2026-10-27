@@ -78,6 +78,11 @@ struct ttp_browser_host {
     // accepts the result; any other result leaves the proposed rectangle alone.
     // The DLL subsequently enforces its skin's resize limits.
     HRESULT (WINAPI* adjust_window_rect)(void*, HWND, uint32_t hit_test, RECT*);
+    // Optional, size-gated UI-thread extension. The lyric result is a BSTR
+    // owned by the caller (SysFreeString). S_FALSE means no known association;
+    // callers must not substitute a guessed same-name lyric file.
+    HRESULT (WINAPI* resolve_associated_lyric)(void*, const wchar_t* media_path,
+                                              BSTR* lyric_path);
 };
 // Version 1 hosts predating the optional window-drag callback remain supported.
 #define TTP_BROWSER_HOST_V1_SIZE offsetof(struct ttp_browser_host, adjust_window_rect)

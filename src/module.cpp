@@ -53,7 +53,10 @@ HRESULT WINAPI Create(const ttp_browser_host* h,const ttp_browser_config* c,void
         // Never read beyond an older host's allocation, nor copy a partial
         // callback pointer when the supplied size ends inside the extension.
         std::memcpy(&m->host,h,TTP_BROWSER_HOST_V1_SIZE);
-        if(h->size>=sizeof(*h))m->host.adjust_window_rect=h->adjust_window_rect;
+        if(h->size>=offsetof(ttp_browser_host,adjust_window_rect)+sizeof(h->adjust_window_rect))
+            m->host.adjust_window_rect=h->adjust_window_rect;
+        if(h->size>=offsetof(ttp_browser_host,resolve_associated_lyric)+sizeof(h->resolve_associated_lyric))
+            m->host.resolve_associated_lyric=h->resolve_associated_lyric;
         m->host.size=sizeof(m->host);m->CopyConfig(*c);
         m->downloads=std::make_unique<ttpbrowser::Downloads>(m->host,m->config);
         m->browser=std::make_unique<ttpbrowser::BrowserWindow>(m->host,m->config,*m->downloads);

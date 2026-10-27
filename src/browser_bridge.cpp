@@ -126,17 +126,15 @@ public:
                 result->vt = VT_DISPATCH; result->pdispVal = inner_; inner_->AddRef(); return S_OK;
             }
             if (!(flags & DISPATCH_METHOD)) return DISP_E_MEMBERNOTFOUND;
-            if (id == 2) { if (p->cArgs) return DISP_E_BADPARAMCOUNT; context_->recommendations.clear(); if (context_->recommendations_changed) context_->recommendations_changed(); return S_OK; }
+            if (id == 2) { if (p->cArgs) return DISP_E_BADPARAMCOUNT; return S_OK; }
             if (id == 1) {
                 if (!context_->accept_recommendations) return S_FALSE;
                 // 0040B86C forwards the three BSTR arguments to 0040B8EB.
-                // Recommendations stay in their own visible list, not the
-                // current playback/BeginAddSongs transaction.
+                // Preserve the old callable interface, but recommendations are
+                // intentionally not implemented: no playlist, menu or playback.
                 if (p->cArgs != 3 || !p->rgvarg) return DISP_E_BADPARAMCOUNT;
                 HRESULT hr = Append(p, false); if (FAILED(hr)) return hr;
-                if (context_->recommendations.size() >= kMaxTracks) { staged_.clear(); return E_OUTOFMEMORY; }
-                context_->recommendations.push_back(std::move(staged_.back())); staged_.clear();
-                if (context_->recommendations_changed) context_->recommendations_changed(); return S_OK;
+                staged_.clear();return S_FALSE;
             }
             return DISP_E_MEMBERNOTFOUND;
         }

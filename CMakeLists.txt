@@ -27,7 +27,7 @@ add_library(ttpbrowser SHARED
   src/module.cpp src/ttpbrowser.def "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc"
   src/browser_window.cpp src/browser_bridge.cpp
   src/webview_backend.cpp src/ie_backend.cpp
-  src/downloads.cpp src/download_skin.cpp src/http_download_queue.cpp
+  src/downloads.cpp src/download_skin.cpp src/download_file_actions.cpp src/http_download_queue.cpp
   "${_rebuild}/src/audio/legacy_cache.cpp"
   "${_rebuild}/src/core/text.cpp"
   "${_rebuild}/src/skin/skin_package.cpp"
@@ -69,7 +69,7 @@ if(TTPBROWSER_BUILD_TESTS)
   target_compile_options(ttpbrowser_runtime_tests PRIVATE /W4 /EHsc /utf-8)
   target_link_libraries(ttpbrowser_runtime_tests PRIVATE ole32 oleaut32 uuid user32 gdi32)
   add_dependencies(ttpbrowser_runtime_tests ttpbrowser)
-  add_executable(ttpbrowser_download_tests tests/downloads_tests.cpp src/downloads.cpp src/download_skin.cpp
+  add_executable(ttpbrowser_download_tests tests/downloads_tests.cpp src/downloads.cpp src/download_skin.cpp src/download_file_actions.cpp
     src/http_download_queue.cpp "${_rebuild}/src/audio/legacy_cache.cpp" "${_rebuild}/src/core/text.cpp"
     "${_rebuild}/src/skin/skin_package.cpp")
   target_include_directories(ttpbrowser_download_tests PRIVATE include src "${_rebuild}/include"
@@ -78,9 +78,36 @@ if(TTPBROWSER_BUILD_TESTS)
   target_compile_options(ttpbrowser_download_tests PRIVATE /W4 /EHsc /utf-8)
   target_link_libraries(ttpbrowser_download_tests PRIVATE ole32 oleaut32 comsuppw advapi32 comctl32 comdlg32 user32 gdi32 shell32 uuid msimg32)
   add_test(NAME ttpbrowser_download_tests COMMAND ttpbrowser_download_tests)
+  add_executable(ttpbrowser_mouse_contract_tests tests/mouse_contract_tests.cpp)
+  target_include_directories(ttpbrowser_mouse_contract_tests PRIVATE include)
+  target_compile_features(ttpbrowser_mouse_contract_tests PRIVATE cxx_std_20)
+  target_compile_definitions(ttpbrowser_mouse_contract_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(ttpbrowser_mouse_contract_tests PRIVATE /W4 /EHsc /utf-8)
+  target_link_libraries(ttpbrowser_mouse_contract_tests PRIVATE ole32 oleaut32 uuid user32 comctl32)
+  add_dependencies(ttpbrowser_mouse_contract_tests ttpbrowser)
+  add_test(NAME ttpbrowser_mouse_contract_tests COMMAND ttpbrowser_mouse_contract_tests "$<TARGET_FILE:ttpbrowser>")
+  set_tests_properties(ttpbrowser_mouse_contract_tests PROPERTIES TIMEOUT 30)
+  add_executable(ttpbrowser_file_actions_tests tests/download_file_actions_tests.cpp src/download_file_actions.cpp)
+  target_include_directories(ttpbrowser_file_actions_tests PRIVATE include src)
+  target_compile_features(ttpbrowser_file_actions_tests PRIVATE cxx_std_20)
+  target_compile_definitions(ttpbrowser_file_actions_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(ttpbrowser_file_actions_tests PRIVATE /W4 /EHsc /utf-8)
+  target_link_libraries(ttpbrowser_file_actions_tests PRIVATE shell32 user32 oleaut32)
+  add_test(NAME ttpbrowser_file_actions_tests COMMAND ttpbrowser_file_actions_tests)
+  add_executable(ttpbrowser_download_mouse_state_tests tests/download_mouse_state_tests.cpp src/download_skin.cpp
+    src/download_file_actions.cpp src/http_download_queue.cpp "${_rebuild}/src/audio/legacy_cache.cpp"
+    "${_rebuild}/src/core/text.cpp" "${_rebuild}/src/skin/skin_package.cpp")
+  target_include_directories(ttpbrowser_download_mouse_state_tests PRIVATE include src "${_rebuild}/include"
+    "${_rebuild}/third_party/ttpcomm-sdk/include")
+  target_compile_features(ttpbrowser_download_mouse_state_tests PRIVATE cxx_std_20)
+  target_compile_definitions(ttpbrowser_download_mouse_state_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(ttpbrowser_download_mouse_state_tests PRIVATE /W4 /EHsc /utf-8)
+  target_link_libraries(ttpbrowser_download_mouse_state_tests PRIVATE ole32 oleaut32 comsuppw advapi32 comctl32 comdlg32 user32 gdi32 shell32 uuid msimg32)
+  add_test(NAME ttpbrowser_download_mouse_state_tests COMMAND ttpbrowser_download_mouse_state_tests)
   # Exercise the same themed common-controls implementation as the real EXE.
   # Without its v6 activation context, tooltip write-buffer bugs can be missed.
-  foreach(browser_test ttpbrowser_contract_tests ttpbrowser_runtime_tests ttpbrowser_download_tests)
+  foreach(browser_test ttpbrowser_contract_tests ttpbrowser_runtime_tests ttpbrowser_download_tests
+      ttpbrowser_mouse_contract_tests ttpbrowser_file_actions_tests ttpbrowser_download_mouse_state_tests)
     target_sources(${browser_test} PRIVATE "${_rebuild}/src/app/ttplayer.manifest")
   endforeach()
   target_link_libraries(ttpbrowser_contract_tests PRIVATE comctl32)

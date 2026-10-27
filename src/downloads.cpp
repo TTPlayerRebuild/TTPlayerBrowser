@@ -1,5 +1,6 @@
 #include "downloads.h"
 #include "download_skin.h"
+#include "download_file_actions.h"
 #include <map>
 #include <set>
 #include <shellapi.h>
@@ -22,7 +23,7 @@ using ttplayer::audio::DownloadState;
 using ttplayer::audio::HttpDownload;
 using ttplayer::audio::HttpDownloadQueue;
 constexpr wchar_t kClass[] = L"TTPBrowser.Downloads.v1",kListClass[]=L"TTPBrowser.DownloadList.v1";
-constexpr UINT kRefreshTimer = 1;
+constexpr UINT kRefreshTimer = 1,kScrollRepeatTimer=2;
 enum : int {kList=201,kLink=202,kSettings=2307,kStart=32960,kPause=32961,kRemoveTask=32962,kSelectTasks=32963,kRemove=32966,kDeleteFile=32967,kRetry=32968,kPlay=32972,kAdd=32973,kSelectFiles=32974,kBrowse=32975,kSendFolder=32980,kImport=40001,kClear=40002};
 std::wstring Copy(const wchar_t* value) { return value ? value : L""; }
 HRESULT ExceptionResult() noexcept {
@@ -56,15 +57,19 @@ struct Downloads::Impl {
     bool artist_folders{}, replace{};
     std::unique_ptr<HttpDownloadQueue> queue;
     DownloadSkin skin;
-    HWND window{},list{},link{},settings{};
+    HWND window{},list{},link{},settings{},tooltip{};
     std::vector<HttpDownload> rows;
     std::vector<size_t> visible;
     std::set<uint64_t> selected;
     struct Rate {uint64_t bytes{};DWORD tick{};double speed{};};
     std::map<uint64_t,Rate> rates;
     int category{},category_width{80},scroll{},focus_row{-1},anchor{-1},sort_column{-1},hover_header{-1};
-    bool descending{},split_drag{},thumb_drag{};
-    int drag_y{},drag_scroll{},hot_scroll{};
+    bool descending{},split_drag{},thumb_drag{},split_moved{};
+    int drag_y{},drag_scroll{},hot_scroll{},header_pressed{-1},wheel_remainder{};
+    int scroll_repeat{},repeat_y{},split_start{},split_anchor{},saved_category_width{80};
+    uint64_t pressed_play_id{};
+    POINT last_list_point{-1,-1};
+    std::wstring tooltip_text;
     HRESULT last_storage{S_OK};
 
     Impl(const ttp_browser_host& source,const ttp_browser_config& config):host(source),state_file(StateFile(config)),skin(source.resources) {

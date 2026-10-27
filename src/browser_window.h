@@ -33,7 +33,12 @@ private:
     Downloads& downloads_;
     HWND window_{}, tooltip_{}, error_panel_{}, error_text_{}, retry_button_{};
     HINSTANCE instance_{};
-    std::wstring state_file_, home_url_, origin_, profile_, current_url_, backend_name_, status_, link_text_, link_url_;
+    std::wstring state_file_, home_url_, origin_, profile_, current_url_, backend_name_, status_;
+    struct Link { std::wstring text, url; };
+    std::vector<Link> links_;
+    size_t link_index_{};
+    int link_x_{}, link_y_{}, link_direction_{1}, link_wait_{};
+    bool link_transition_{}, link_hover_{}, link_cycle_done_{};
     bool autostart_{}, downloads_view_{}, can_back_{}, can_forward_{}, browser_ready_{}, modern_attempt_{}, error_visible_{}, destroying_{}, loading_{}, first_position_{true};
     bool topmost_{};
     BYTE opacity_{255};
@@ -55,6 +60,7 @@ private:
     void Layout();
     void Paint(HDC target = nullptr);
     void Activate(int);
+    void BorderContextMenu(POINT);
     void SwitchView(bool);
     void StateChanged();
     void ProcessActions();
@@ -72,7 +78,15 @@ private:
     void ContinueBackgroundDrag();
     void EndBackgroundDrag(bool cancel = false);
     SIZE MinimumSize() const;
-    void Recommendations();
+    const std::wstring& LinkText(size_t index) const;
+    const std::wstring& LinkUrl() const;
+    SIZE LinkTextSize(size_t index) const;
+    RECT LinkHitRect() const;
+    void ResetLinkAnimation();
+    void RefreshLinkHover();
+    void UpdateLinkTimer();
+    void TickLink();
+    void PaintLink(HDC dc, RECT rect);
     RECT ContentRect() const;
     RECT ControlRect(int) const;
     int Hit(POINT) const;

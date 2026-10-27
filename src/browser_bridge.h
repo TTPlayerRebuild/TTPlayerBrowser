@@ -19,8 +19,6 @@ struct BridgeContext {
     std::function<HRESULT(uint32_t, uint32_t, BSTR*)> query;
     std::function<HRESULT(std::wstring, std::wstring, std::wstring, uint64_t)> setup;
     std::function<HRESULT(std::wstring, std::wstring, uint64_t)> hyperlink;
-    std::vector<BrowserTrack> recommendations;
-    std::function<void()> recommendations_changed;
 };
 // Each external object has its own legacy Begin/Add/End staging transaction.
 HRESULT CreateBrowserDispatch(std::shared_ptr<BridgeContext>, bool origin_scoped, IDispatch**);

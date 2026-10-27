@@ -3,6 +3,7 @@
 #include <commctrl.h>
 #include <windowsx.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #include <algorithm>
 #include <cstring>
 #include <new>
@@ -12,8 +13,16 @@ namespace {
 constexpr wchar_t kClass[] = L"TTPlayer_BrowserWnd";
 constexpr UINT kActions = WM_APP + 0x321, kFallback = WM_APP + 0x322;
 constexpr UINT_PTR kNavigationTimer = 101;
+constexpr UINT_PTR kLinkTimer = 102;
 constexpr int kRetry = 2001;
 const wchar_t* const kLabels[]{L"关闭", L"音乐窗", L"下载管理", L"后退", L"前进", L"刷新", L"启动时显示", L"千千音乐"};
+const std::wstring kDefaultLinkText=L"千千静听使用技巧";
+const std::wstring kDefaultLinkUrl=L"http://ttplayer.qianqian.com/help.html?f=client";
+LOGFONTW LinkFont(LOGFONTW description) {
+    if(!description.lfHeight && !description.lfFaceName[0])
+        GetObjectW(GetStockObject(DEFAULT_GUI_FONT),sizeof(description),&description);
+    description.lfUnderline=TRUE;return description;
+}
 HBITMAP CopyBitmap(HBITMAP source) { return source ? static_cast<HBITMAP>(CopyImage(source, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION)) : nullptr; }
 bool ValidBounds(const RECT& r) { return r.right - r.left >= 200 && r.bottom - r.top >= 150 && r.right - r.left <= 16384 && r.bottom - r.top <= 16384; }
 std::wstring ParentDirectory(std::wstring path) { const auto slash = path.find_last_of(L"/\\"); return slash == path.npos ? L"" : path.substr(0, slash); }
@@ -158,16 +167,15 @@ BrowserWindow::BrowserWindow(const ttp_browser_host& host, const ttp_browser_con
     bridge_->hyperlink = [this](std::wstring text, std::wstring url, uint64_t generation) {
         Action action; action.kind = Action::Hyperlink; action.a = std::move(text); action.b = std::move(url); action.document_generation = generation; return Queue(std::move(action));
     };
-    bridge_->recommendations_changed = [this] { if (window_) InvalidateRect(window_, nullptr, FALSE); };
     Configure(config);
 }
 BrowserWindow::~BrowserWindow() {
     destroying_ = true;
     bridge_->alive = false; bridge_->allowed = {}; bridge_->submit = {}; bridge_->query = {}; bridge_->setup = {};
-    bridge_->hyperlink = {}; bridge_->recommendations_changed = {}; bridge_->recommendations.clear();
+    bridge_->hyperlink = {};
     actions_.clear();
     if (backend_) backend_->Shutdown(); backend_.reset(); external_.Reset();
-    if (window_) { KillTimer(window_, kNavigationTimer); DestroyWindow(window_); }
+    if (window_) { KillTimer(window_, kNavigationTimer);KillTimer(window_,kLinkTimer); DestroyWindow(window_); }
     FreeSkin();
     // Another instance may still own a window of this class; Windows refuses
     // that unregister until its final HWND is gone.
@@ -181,7 +189,6 @@ HRESULT BrowserWindow::Configure(const ttp_browser_config& config) {
     const bool changed_engine = engine_ != config.engine;
     engine_ = config.engine;
     bridge_->accept_recommendations = config.accept_recommendations != FALSE;
-    if (!bridge_->accept_recommendations) bridge_->recommendations.clear();
     state_file_ = config.state_file ? config.state_file : L"";
     home_url_ = home; origin_ = origin; topmost_ = config.topmost != FALSE; opacity_ = config.opacity;
     if (!opacity_) opacity_ = 255;
@@ -387,20 +394,25 @@ bool BrowserWindow::Enabled(int id) const {
     return true;
 }
 int BrowserWindow::Hit(POINT point) const {
-    for (int i = 0; i < TTP_BROWSER_CONTROL_COUNT; ++i) { const auto bounds = ControlRect(i); if (PtInRect(&bounds, point)) return i; }
+    for (int i = 0; i < TTP_BROWSER_CONTROL_COUNT; ++i) {
+        const auto bounds = i==TTP_BROWSER_LINK ? LinkHitRect() : ControlRect(i);
+        if (PtInRect(&bounds, point)) return i;
+    }
     return -1;
 }
 void BrowserWindow::UpdateTooltips() {
     if (!tooltip_) return;
     for (int i = 0; i < TTP_BROWSER_CONTROL_COUNT; ++i) {
-        TOOLINFOW tool{sizeof(tool)}; tool.hwnd = window_; tool.uId = i + 1; tool.rect = ControlRect(i);
+        const auto bounds=i==TTP_BROWSER_LINK ? LinkHitRect() : ControlRect(i);
+        TOOLINFOW tool{sizeof(tool)}; tool.hwnd = window_; tool.uId = i + 1; tool.rect = bounds;
         // GETTOOLINFO writes text into lpszText when non-null. Query only the
         // registration here; never pass the read-only label as an output buffer.
         // ADDTOOL below borrows that label as input, which is a different contract.
         if (!SendMessageW(tooltip_, TTM_GETTOOLINFOW, 0, reinterpret_cast<LPARAM>(&tool))) {
-            tool.hwnd = window_; tool.uId = i + 1; tool.rect = ControlRect(i); tool.uFlags = TTF_SUBCLASS; tool.lpszText = const_cast<wchar_t*>(kLabels[i]);
+            tool.hwnd = window_; tool.uId = i + 1; tool.rect = bounds; tool.uFlags = TTF_SUBCLASS;
+            tool.lpszText = i==TTP_BROWSER_LINK ? LPSTR_TEXTCALLBACKW : const_cast<wchar_t*>(kLabels[i]);
             SendMessageW(tooltip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
-        } else { tool.rect = ControlRect(i); SendMessageW(tooltip_, TTM_NEWTOOLRECTW, 0, reinterpret_cast<LPARAM>(&tool)); }
+        } else { tool.rect = bounds; SendMessageW(tooltip_, TTM_NEWTOOLRECTW, 0, reinterpret_cast<LPARAM>(&tool)); }
     }
 }
 void BrowserWindow::Layout() {
@@ -415,7 +427,7 @@ void BrowserWindow::Layout() {
         MoveWindow(error_text_, bounds.left + 22, bounds.top + std::max(16, height / 2 - 70), std::max(1, width - 44), 120, TRUE);
         MoveWindow(retry_button_, bounds.left + std::max(12, width / 2 - 55), bounds.top + std::min(height - 38, height / 2 + 62), 110, 28, TRUE);
     }
-    UpdateTooltips();
+    RefreshLinkHover();ResetLinkAnimation();UpdateTooltips();
 }
 HRESULT BrowserWindow::StartBrowser(bool force_ie) {
     if (backend_) { backend_->Shutdown(); backend_.reset(); }
@@ -505,6 +517,7 @@ HRESULT BrowserWindow::Show(uint32_t view) {
     if (view == TTP_BROWSER_VIEW_MUSIC) SwitchView(false);
     else if (view == TTP_BROWSER_VIEW_DOWNLOADS) SwitchView(true);
     else SwitchView(downloads_view_);
+    UpdateLinkTimer();
     SetForegroundWindow(window_); StateChanged(); return S_OK;
 }
 HRESULT BrowserWindow::ExternalDispatch(IDispatch** dispatch) {
@@ -534,7 +547,14 @@ void BrowserWindow::ProcessActions() {
         if (SUCCEEDED(hr)) { status_ = L"已加入下载管理"; downloads_.Refresh(); }
     } else if (action.kind == Action::Setup) {
         hr = host_.setup_pack ? host_.setup_pack(host_.context, action.a.c_str(), action.b.c_str(), action.c.c_str()) : E_NOTIMPL;
-    } else { link_text_ = std::move(action.a); link_url_ = std::move(action.b); }
+    } else {
+        if(tooltip_)SendMessageW(tooltip_,TTM_POP,0,0);
+        if(action.b.empty()) {links_.clear();link_index_=0;}
+        else if(links_.size()<1024)links_.push_back({std::move(action.a),std::move(action.b)});
+        else hr=HRESULT_FROM_WIN32(ERROR_BUSY);
+        if(pressed_==TTP_BROWSER_LINK) {pressed_=-1;if(GetCapture()==window_)ReleaseCapture();}
+        RefreshLinkHover();ResetLinkAnimation();UpdateTooltips();
+    }
     if (FAILED(hr)) { wchar_t code[32]{}; swprintf_s(code, L"0x%08lX", static_cast<unsigned long>(hr)); status_ = std::wstring(L"操作未完成：") + code; }
     if (window_) InvalidateRect(window_, nullptr, FALSE);
 }
@@ -551,19 +571,95 @@ HRESULT BrowserWindow::GetState(ttp_browser_state* state) const {
         (browser_ready_ ? modern_attempt_ ? TTP_BROWSER_STATE_WEBVIEW2 : TTP_BROWSER_STATE_IE : 0);
     return S_OK;
 }
-void BrowserWindow::Recommendations() {
-    if (bridge_->recommendations.empty()) { if (!link_url_.empty() && backend_) backend_->Navigate(link_url_); return; }
-    HMENU menu = CreatePopupMenu();
-    const size_t count = std::min<size_t>(bridge_->recommendations.size(), 500);
-    for (size_t i = 0; i < count; ++i) {
-        const auto& track = bridge_->recommendations[i];
-        std::wstring title = track.artist.empty() ? track.title : track.artist + L" - " + track.title;
-        if (title.empty()) title = track.source; AppendMenuW(menu, MF_STRING, i + 1, title.c_str());
+const std::wstring& BrowserWindow::LinkText(size_t index) const {
+    if(links_.empty())return kDefaultLinkText;
+    const auto& link=links_[index%links_.size()];return link.text.empty()?link.url:link.text;
+}
+const std::wstring& BrowserWindow::LinkUrl() const {
+    return links_.empty()?kDefaultLinkUrl:links_[link_index_%links_.size()].url;
+}
+SIZE BrowserWindow::LinkTextSize(size_t index) const {
+    if(!window_)return {};
+    HDC dc=GetDC(window_);if(!dc)return {};
+    const auto description=LinkFont(skin_.controls[TTP_BROWSER_LINK].font);
+    HFONT font=CreateFontIndirectW(&description);const auto old=SelectObject(dc,font?font:GetStockObject(DEFAULT_GUI_FONT));
+    const auto& text=LinkText(index);SIZE size{};GetTextExtentPoint32W(dc,text.c_str(),static_cast<int>(text.size()),&size);
+    SelectObject(dc,old);if(font)DeleteObject(font);ReleaseDC(window_,dc);return size;
+}
+RECT BrowserWindow::LinkHitRect() const {
+    RECT rect=ControlRect(TTP_BROWSER_LINK);if(IsRectEmpty(&rect))return rect;
+    const auto size=LinkTextSize(link_index_);
+    if(size.cx<rect.right-rect.left)rect.left=rect.right-size.cx;
+    return rect;
+}
+void BrowserWindow::ResetLinkAnimation() {
+    link_x_=link_y_=0;link_direction_=1;link_transition_=link_cycle_done_=false;
+    const auto rect=window_?ControlRect(TTP_BROWSER_LINK):RECT{};
+    link_wait_=LinkTextSize(link_index_).cx>rect.right-rect.left?25:75;
+    UpdateLinkTimer();
+}
+void BrowserWindow::RefreshLinkHover() {
+    POINT point{};bool over{};
+    if(window_ && IsWindowVisible(window_) && GetCursorPos(&point) &&
+       (WindowFromPoint(point)==window_ || GetCapture()==window_)) {
+        ScreenToClient(window_,&point);over=Hit(point)==TTP_BROWSER_LINK;
     }
-    POINT point{}; GetCursorPos(&point); const UINT selected = static_cast<UINT>(TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, window_, nullptr));
+    link_hover_=over;
+    if(over)hover_=TTP_BROWSER_LINK;else if(hover_==TTP_BROWSER_LINK)hover_=-1;
+}
+void BrowserWindow::UpdateLinkTimer() {
+    if(!window_)return;
+    KillTimer(window_,kLinkTimer);
+    const auto rect=ControlRect(TTP_BROWSER_LINK);
+    if(IsWindowVisible(window_) && !link_hover_ && pressed_!=TTP_BROWSER_LINK && !IsRectEmpty(&rect) &&
+       (links_.size()>1 || LinkTextSize(link_index_).cx>rect.right-rect.left))
+        SetTimer(window_,kLinkTimer,40,nullptr);
+}
+void BrowserWindow::TickLink() {
+    if(link_hover_ || pressed_==TTP_BROWSER_LINK || !window_ || !IsWindowVisible(window_))return;
+    if(link_wait_>0) {--link_wait_;return;}
+    const auto rect=ControlRect(TTP_BROWSER_LINK);
+    const int overflow=std::max(0L,LinkTextSize(link_index_).cx-(rect.right-rect.left));
+    if(link_transition_) {
+        if(++link_y_>=rect.bottom-rect.top) {
+            link_index_=(link_index_+1)%links_.size();ResetLinkAnimation();UpdateTooltips();
+        }
+    } else if(links_.size()>1 && (!overflow || link_cycle_done_))link_transition_=true;
+    else if(overflow) {
+        link_x_-=link_direction_;
+        if(link_x_<=-overflow){link_x_=-overflow;link_direction_=-1;link_wait_=25;}
+        else if(link_x_>=0){link_x_=0;link_direction_=1;link_wait_=links_.size()>1?75:25;link_cycle_done_=true;}
+    }
+    InvalidateRect(window_,&rect,FALSE);
+}
+void BrowserWindow::PaintLink(HDC dc,RECT rect) {
+    const int saved=SaveDC(dc);IntersectClipRect(dc,rect.left,rect.top,rect.right,rect.bottom);
+    const auto draw=[&](size_t index,int x_offset,int y_offset) {
+        const auto& text=LinkText(index);SIZE size{};GetTextExtentPoint32W(dc,text.c_str(),static_cast<int>(text.size()),&size);
+        const int x=size.cx<rect.right-rect.left?rect.right-size.cx:rect.left;
+        TextOutW(dc,x+x_offset,rect.top+(rect.bottom-rect.top-size.cy)/2+y_offset,text.c_str(),static_cast<int>(text.size()));
+    };
+    draw(link_index_,link_x_,-link_y_);
+    if(link_transition_ && links_.size()>1)draw((link_index_+1)%links_.size(),0,rect.bottom-rect.top-link_y_);
+    RestoreDC(dc,saved);
+}
+void BrowserWindow::BorderContextMenu(POINT point) {
+    if(point.x==-1 && point.y==-1) {
+        point={20,20};ClientToScreen(window_,&point);
+    } else {
+        POINT client=point;ScreenToClient(window_,&client);
+        // Only the skin background/border owns this menu. Controls and web or
+        // download content retain their own mouse behavior.
+        if(BackgroundHit(client)==HTCLIENT)return;
+    }
+    SendMessageW(window_,WM_CANCELMODE,0,0);
+    const HMENU menu=CreatePopupMenu();if(!menu)return;
+    AppendMenuW(menu,MF_STRING|(downloads_view_?0:MF_CHECKED),TTP_BROWSER_MUSIC+1,L"音乐窗");
+    AppendMenuW(menu,MF_STRING|(downloads_view_?MF_CHECKED:0),TTP_BROWSER_DOWNLOADS+1,L"下载管理");
+    const UINT selected=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,window_,nullptr);
     DestroyMenu(menu);
-    if (selected && selected <= count) { Action action; action.kind = Action::Submit;
-        action.modes[1] = action.modes[2] = 1; action.tracks.push_back(bridge_->recommendations[selected - 1]); Queue(std::move(action)); }
+    if(selected==TTP_BROWSER_MUSIC+1 || selected==TTP_BROWSER_DOWNLOADS+1)
+        Activate(static_cast<int>(selected)-1);
 }
 void BrowserWindow::Activate(int id) {
     if (!Enabled(id)) return;
@@ -576,9 +672,9 @@ void BrowserWindow::Activate(int id) {
     case TTP_BROWSER_REFRESH: if (error_visible_) Retry(); else if (backend_) backend_->Refresh(); break;
     case TTP_BROWSER_STARTUP: autostart_ = !autostart_; StateChanged(); InvalidateRect(window_, nullptr, FALSE); break;
     case TTP_BROWSER_LINK:
-        if (!link_url_.empty()) { SwitchView(false); if (backend_) backend_->Navigate(link_url_); }
-        else if (!bridge_->recommendations.empty()) Recommendations();
-        else { SwitchView(false); if (backend_) backend_->Navigate(home_url_); }
+        // 0040C701 delegates the link to the Shell; never navigate the embedded
+        // music document or substitute a recommendation menu here.
+        {const auto url=LinkUrl();if(!HttpOrigin(url).empty())ShellExecuteW(window_,L"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);}
         break;
     }
 }
@@ -599,7 +695,7 @@ void BrowserWindow::Paint(HDC screen) {
                 font(description.lfHeight || description.lfFaceName[0] ? CreateFontIndirectW(&description) : nullptr),
                 previous(font ? SelectObject(dc,font) : nullptr) {}
             ~FontSelection() { if (font) { SelectObject(dc,previous); DeleteObject(font); } }
-        } selected_font(dc, control.font);
+        } selected_font(dc, i==TTP_BROWSER_LINK?LinkFont(control.font):control.font);
         const bool selected = (i == TTP_BROWSER_MUSIC && !downloads_view_) || (i == TTP_BROWSER_DOWNLOADS && downloads_view_);
         const bool pressed = (pressed_ == i && hover_ == i) || selected;
         SetTextColor(dc, Enabled(i) ? skin_.valid ? control.color : RGB(40,55,75) : GetSysColor(COLOR_GRAYTEXT));
@@ -618,9 +714,7 @@ void BrowserWindow::Paint(HDC screen) {
             DrawFrameControl(dc, &box, DFC_BUTTON, DFCS_BUTTONCHECK | (autostart_ ? DFCS_CHECKED : 0));
             rect.left += 20; DrawTextW(dc, kLabels[i], -1, &rect, DT_SINGLELINE | DT_VCENTER);
         } else if (i == TTP_BROWSER_LINK) {
-            const auto text = !link_text_.empty() ? link_text_ : !bridge_->recommendations.empty() ?
-                L"推荐歌曲（" + std::to_wstring(bridge_->recommendations.size()) + L"）" : status_.empty() ? std::wstring(L"千千音乐") : status_;
-            DrawTextW(dc, text.c_str(), -1, &rect, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_END_ELLIPSIS);
+            PaintLink(dc,rect);
         } else {
             if (hover_ == i || pressed) DrawEdge(dc, &rect, pressed ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
             const wchar_t* text = i == TTP_BROWSER_CLOSE ? L"×" : i == TTP_BROWSER_BACK ? L"‹" : i == TTP_BROWSER_FORWARD ? L"›" : i == TTP_BROWSER_REFRESH ? L"↻" : kLabels[i];
@@ -635,6 +729,12 @@ BOOL BrowserWindow::Translate(MSG* message) {
     if (!message || !window_ || !IsWindowVisible(window_) ||
         (message->hwnd != window_ && !IsChild(window_, message->hwnd))) return FALSE;
     if (message->message == WM_KEYDOWN) {
+        if(message->wParam==VK_ESCAPE && downloads_view_ && downloads_.Window()) {
+            const HWND captured=GetCapture();
+            if(captured && (captured==downloads_.Window() || IsChild(downloads_.Window(),captured))) {
+                SendMessageW(captured,WM_CANCELMODE,0,0);return TRUE;
+            }
+        }
         if (message->wParam==VK_ESCAPE && drag_hit_!=HTNOWHERE) { EndBackgroundDrag(true);return TRUE; }
         if (message->wParam == VK_ESCAPE || message->wParam == VK_F11) { Show(TTP_BROWSER_VIEW_HIDE); return TRUE; }
         if (message->wParam == VK_F5 && !downloads_view_) { Activate(TTP_BROWSER_REFRESH); return TRUE; }
@@ -668,7 +768,8 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     case WM_SIZE: self->UpdateWindowRegion();self->Layout();
         RedrawWindow(hwnd,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_NOERASE);return 0;
     case WM_EXITSIZEMOVE: self->StateChanged(); return 0;
-    case WM_SHOWWINDOW: if (!wp) { self->EndBackgroundDrag(); if (self->pressed_>=0) { self->pressed_=-1;ReleaseCapture(); } } break;
+    case WM_SHOWWINDOW: if (!wp) { self->EndBackgroundDrag();self->link_hover_=false;KillTimer(hwnd,kLinkTimer);
+        if (self->pressed_>=0) { self->pressed_=-1;ReleaseCapture(); } } else self->ResetLinkAnimation();break;
     case WM_CLOSE: self->Show(TTP_BROWSER_VIEW_HIDE); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: self->Paint(); return 0;
@@ -680,7 +781,8 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
         if (reinterpret_cast<HWND>(wp)!=hwnd || LOWORD(lp)!=HTCLIENT) break;
         POINT point{};GetCursorPos(&point);ScreenToClient(hwnd,&point);
         const int hit=self->drag_hit_!=HTNOWHERE ? self->drag_hit_ : self->BackgroundHit(point);
-        LPCWSTR cursor=IDC_ARROW;
+        const int control=self->Hit(point);
+        LPCWSTR cursor=control>=0 && self->Enabled(control)?IDC_HAND:IDC_ARROW;
         if(hit==HTTOPLEFT || hit==HTBOTTOMRIGHT)cursor=IDC_SIZENWSE;
         else if(hit==HTTOPRIGHT || hit==HTBOTTOMLEFT)cursor=IDC_SIZENESW;
         else if(hit==HTLEFT || hit==HTRIGHT)cursor=IDC_SIZEWE;
@@ -690,21 +792,36 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     case WM_MOUSEMOVE: {
         if(self->drag_hit_!=HTNOWHERE) { self->ContinueBackgroundDrag();return 0; }
         POINT point{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)}; const int hit = self->Hit(point);
+        const bool link_hover=hit==TTP_BROWSER_LINK;
+        if(link_hover!=self->link_hover_) {self->link_hover_=link_hover;self->ResetLinkAnimation();self->UpdateTooltips();}
         if (hit != self->hover_) { self->hover_ = hit; InvalidateRect(hwnd,nullptr,FALSE); }
         TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, hwnd, 0}; TrackMouseEvent(&tracking); return 0;
     }
-    case WM_MOUSELEAVE: self->hover_ = -1; InvalidateRect(hwnd,nullptr,FALSE); return 0;
+    case WM_MOUSELEAVE: self->hover_ = -1;
+        if(self->link_hover_){self->link_hover_=false;self->ResetLinkAnimation();}
+        InvalidateRect(hwnd,nullptr,FALSE); return 0;
     case WM_LBUTTONDOWN: { POINT point{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)}; self->pressed_ = self->Hit(point);
+        if(self->pressed_==TTP_BROWSER_LINK){self->link_hover_=true;self->ResetLinkAnimation();}
         if (self->pressed_ >= 0) { self->hover_ = self->pressed_; SetCapture(hwnd); InvalidateRect(hwnd,nullptr,FALSE); }
         else self->BeginBackgroundDrag(point);return 0; }
     case WM_LBUTTONUP: { if(self->drag_hit_!=HTNOWHERE) { self->EndBackgroundDrag();return 0; }
         const int pressed = self->pressed_; self->pressed_ = -1; ReleaseCapture(); POINT point{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
         if (pressed >= 0 && pressed == self->Hit(point)) self->Activate(pressed); InvalidateRect(hwnd,nullptr,FALSE); return 0; }
-    case WM_CAPTURECHANGED: self->EndBackgroundDrag();self->pressed_ = -1; InvalidateRect(hwnd,nullptr,FALSE); return 0;
-    case WM_CANCELMODE: self->EndBackgroundDrag(true);self->pressed_=-1;if(GetCapture()==hwnd)ReleaseCapture();return 0;
-    case WM_CONTEXTMENU: self->Recommendations(); return 0;
+    case WM_CAPTURECHANGED: self->EndBackgroundDrag();self->pressed_ = -1;self->UpdateLinkTimer(); InvalidateRect(hwnd,nullptr,FALSE); return 0;
+    case WM_CANCELMODE: self->EndBackgroundDrag(true);self->pressed_=-1;if(GetCapture()==hwnd)ReleaseCapture();self->UpdateLinkTimer();break;
+    case WM_CONTEXTMENU:
+        if(reinterpret_cast<HWND>(wp)==hwnd)self->BorderContextMenu({GET_X_LPARAM(lp),GET_Y_LPARAM(lp)});
+        return 0;
+    case WM_NOTIFY: {
+        const auto* header=reinterpret_cast<NMHDR*>(lp);
+        if(header && header->hwndFrom==self->tooltip_ && header->code==TTN_GETDISPINFOW && header->idFrom==TTP_BROWSER_LINK+1) {
+            auto* tip=reinterpret_cast<NMTTDISPINFOW*>(lp);
+            tip->lpszText=const_cast<wchar_t*>(self->LinkText(self->link_index_).c_str());return 0;
+        }
+        break;
+    }
     case WM_COMMAND: if (LOWORD(wp) == kRetry) { self->Retry(); return 0; } break;
-    case WM_TIMER: if (wp == kNavigationTimer) {
+    case WM_TIMER: if(wp==kLinkTimer){self->TickLink();return 0;} if (wp == kNavigationTimer) {
         KillTimer(hwnd,kNavigationTimer);
         if (self->modern_attempt_ && !self->browser_ready_ && self->engine_ == 0) PostMessageW(hwnd,kFallback,0,0);
         else { if (self->backend_) self->backend_->Stop(); self->Error(L"网页在 30 秒内没有完成加载，请检查连接后重试。"); }
@@ -714,7 +831,7 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     case kFallback: if (!self->destroying_ && !self->browser_ready_) self->StartBrowser(true); return 0;
     case WM_DESTROY:
         self->destroying_ = true; self->bridge_->alive = false; self->actions_.clear();
-        KillTimer(hwnd,kNavigationTimer); if (self->backend_) self->backend_->Shutdown();
+        KillTimer(hwnd,kNavigationTimer);KillTimer(hwnd,kLinkTimer); if (self->backend_) self->backend_->Shutdown();
         if (self->tooltip_) { DestroyWindow(self->tooltip_); self->tooltip_ = nullptr; } return 0;
     case WM_NCDESTROY: SetWindowLongPtrW(hwnd,GWLP_USERDATA,0); self->window_ = nullptr; break;
     } } catch (...) { return message == WM_CREATE ? -1 : 0; }
