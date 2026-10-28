@@ -13,6 +13,10 @@ struct BrowserEvents {
     std::function<void(bool, bool)> history;
     std::function<bool(const std::wstring&)> trusted;
     std::function<void(const std::wstring&)> download;
+    // Return true only when a component recognized and consumed a file link.
+    std::function<bool(const std::wstring& page,const std::wstring& target)> intercept_download;
+    std::wstring adapter_script;
+    std::function<void(const std::wstring& page,const std::wstring& json)> adapter_message;
     // An exact embedded res: URL. Nonempty opts into a closed local document.
     std::wstring local_document;
 };

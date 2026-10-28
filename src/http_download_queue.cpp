@@ -104,6 +104,7 @@ struct HttpDownloadQueue::Impl {
                 if(j->info.destination.empty()) j->info.destination=j->info.entry.save;
                 if(j->info.destination.empty() || !j->info.destination.is_absolute()) continue;
                 j->info.replace=Attribute(n.Get(),L"replace")==L"1";
+                j->info.response_filename=Attribute(n.Get(),L"responsefilename")==L"1";
                 const auto state=Attribute(n.Get(),L"state");
                 if(state==L"complete" || (state.empty() && !j->info.entry.save.empty())) j->info.state=DownloadState::complete;
                 else if(state==L"canceled") j->info.state=DownloadState::canceled;
@@ -174,6 +175,7 @@ struct HttpDownloadQueue::Impl {
                     attr(L"caption",d.display_title);if(!d.tid.empty())attr(L"tid",d.tid);
                     attr(L"sourceurl",d.entry.sourceurl);attr(L"excludeurl",d.entry.excludeurl);attr(L"tag",d.entry.tag);attr(L"playtag",d.entry.playtag);
                     attr(L"destination",d.destination.wstring());attr(L"replace",d.replace?L"1":L"0");
+                    if(d.response_filename)attr(L"responsefilename",L"1");
                     attr(L"state",d.state==DownloadState::complete?L"complete":d.state==DownloadState::failed?L"failed":d.state==DownloadState::canceled?L"canceled":d.state==DownloadState::paused?L"paused":L"waiting");
                     attr(L"result",std::to_wstring(static_cast<uint32_t>(d.result)));
                     xml+=L"/>\n";
@@ -244,11 +246,27 @@ struct HttpDownloadQueue::Impl {
             result=opener(job->info.entry.sourceurl,job->canceled->event,&stream,&can_persist);
             if(FAILED(result)) throw Error{result};
             if(!stream) throw Error{E_UNEXPECTED};
-            STATSTG stat{};result=stream->Stat(&stat,STATFLAG_NONAME);
+            STATSTG stat{};result=stream->Stat(&stat,job->info.response_filename?STATFLAG_DEFAULT:STATFLAG_NONAME);
+            std::wstring response_name;
+            if(stat.pwcsName){response_name=stat.pwcsName;CoTaskMemFree(stat.pwcsName);stat.pwcsName=nullptr;}
             // Endless radio must not occupy a slot or fill a user's download disk.
             if(FAILED(result) || !stat.cbSize.QuadPart || stat.cbSize.QuadPart>0x80000000ULL) throw Error{HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)};
             if(job->info.prefetch && !can_persist) throw Error{HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)};
-            {std::lock_guard lock(mutex);job->info.total=stat.cbSize.QuadPart;job->info.received=0;}
+            {std::lock_guard lock(mutex);job->info.total=stat.cbSize.QuadPart;job->info.received=0;
+                // Only the explicit package path opts in. Never accept a path,
+                // device name, or a changed executable extension from a stream.
+                if(job->info.response_filename && !response_name.empty() && response_name.size()<=240 &&
+                   response_name.find_first_of(L"\\/:*?\"<>|")==response_name.npos &&
+                   std::none_of(response_name.begin(),response_name.end(),[](wchar_t c){return c<32;}) &&
+                   !_wcsicmp(std::filesystem::path(response_name).extension().c_str(),L".osz")) {
+                    const auto stem=std::filesystem::path(response_name).stem().wstring();
+                    if(_wcsicmp(stem.c_str(),L"CON")&&_wcsicmp(stem.c_str(),L"PRN")&&_wcsicmp(stem.c_str(),L"AUX")&&_wcsicmp(stem.c_str(),L"NUL")&&
+                       !(stem.size()==4&&(!_wcsnicmp(stem.c_str(),L"COM",3)||!_wcsnicmp(stem.c_str(),L"LPT",3))&&stem[3]>=L'1'&&stem[3]<=L'9')) {
+                        job->info.destination=job->info.destination.parent_path()/response_name;
+                        job->info.display_title=job->info.entry.title=response_name;Changed();
+                    }
+                }
+            }
             Handle output;
             if(!job->info.prefetch) {
                 // Allocate before publishing so the noexcept completion path
@@ -275,7 +293,16 @@ struct HttpDownloadQueue::Impl {
             if(output.h!=INVALID_HANDLE_VALUE){Check(FlushFileBuffers(output.h));CloseHandle(output.h);output.h=INVALID_HANDLE_VALUE;
                 std::lock_guard lock(mutex);
                 if(job->canceled->load()) throw Error{HRESULT_FROM_WIN32(ERROR_CANCELLED)};
-                Check(MoveFileExW(temporary.c_str(),job->info.destination.c_str(),MOVEFILE_WRITE_THROUGH|(job->info.replace?MOVEFILE_REPLACE_EXISTING:0)));
+                const auto requested=job->info.destination;
+                for(unsigned suffix=0;;) {
+                    published_path=job->info.destination.wstring();
+                    if(MoveFileExW(temporary.c_str(),job->info.destination.c_str(),MOVEFILE_WRITE_THROUGH|(job->info.replace?MOVEFILE_REPLACE_EXISTING:0)))break;
+                    const auto error=GetLastError();
+                    if(!job->info.response_filename||job->info.replace||(error!=ERROR_ALREADY_EXISTS&&error!=ERROR_FILE_EXISTS)||++suffix>9999)
+                        throw Error{HRESULT_FROM_WIN32(error)};
+                    job->info.destination=requested.parent_path()/(requested.stem().wstring()+L" ("+std::to_wstring(suffix)+L")"+requested.extension().wstring());
+                }
+                if(job->info.response_filename)job->info.display_title=job->info.entry.title=job->info.destination.filename().wstring();
                 // Replacing a shared pathname must not leave another URL mapped
                 // to the replacement song in the catalog.
                 for(auto& other:jobs) if(other!=job && !_wcsicmp(other->info.entry.save.c_str(),job->info.destination.c_str())) other->info.entry.save.clear();
@@ -310,14 +337,16 @@ void HttpDownloadQueue::Configure(int maximum,std::filesystem::path cache_folder
     impl_->StartWorkers();
     impl_->changed.notify_all();
 }
-uint64_t HttpDownloadQueue::Enqueue(std::wstring url,std::wstring title,std::filesystem::path destination,bool replace,std::wstring artist,std::wstring tid) {
+uint64_t HttpDownloadQueue::Enqueue(std::wstring url,std::wstring title,std::filesystem::path destination,bool replace,std::wstring artist,std::wstring tid,bool response_filename) {
     url=HttpDownloadKey(std::move(url));if(url.empty() || destination.empty() || !destination.is_absolute()) return 0;
     std::lock_guard lock(impl_->mutex);if(!impl_->writable) return 0;
-    for(auto& j:impl_->jobs) if(!j->removed && !j->info.prefetch && j->info.entry.sourceurl==url && j->info.destination==destination) return j->info.id;
+    for(auto& j:impl_->jobs) if(!j->removed && !j->info.prefetch && j->info.entry.sourceurl==url &&
+        (j->info.destination==destination||(response_filename&&j->info.response_filename&&j->info.destination.parent_path()==destination.parent_path()))) return j->info.id;
     if(impl_->jobs.size()>=10000) return 0;
     auto job=std::make_shared<Impl::Job>();job->info.id=++impl_->serial;job->info.entry.sourceurl=std::move(url);
     job->info.entry.title=LegacyCacheTitle(job->info.entry.sourceurl,title,artist);
     job->info.tid=std::move(tid);job->info.display_title=std::move(title);job->info.destination=std::move(destination);job->info.replace=replace;
+    job->info.response_filename=response_filename;
     if(std::count_if(impl_->jobs.begin(),impl_->jobs.end(),[](const auto& j){return j->info.state==DownloadState::running;})>=impl_->maximum)
         for(auto& j:impl_->jobs) if(j->info.prefetch && j->info.state==DownloadState::running && !j->canceled->load()) {j->requeue=true;j->canceled->store(true);break;}
     impl_->jobs.push_back(job);

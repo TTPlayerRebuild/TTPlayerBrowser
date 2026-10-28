@@ -216,7 +216,7 @@ std::string Request(const std::wstring& url,const std::string& body,const std::w
 }
 
 Library::Library(std::filesystem::path state_file,Transport transport):file_(state_file.parent_path()/L"MediaLibrary.dat"),transport_(std::move(transport)) {
-    profiles_={{Provider::Subsonic,Auth::Password,L"subsonic",L"Navidrome / OpenSubsonic",L"http://127.0.0.1:4533"},
+    profiles_={{Provider::Subsonic,Auth::Password,L"subsonic",L"OpenSubsonic",L"http://127.0.0.1:4533"},
                {Provider::OpenList,Auth::Guest,L"openlist",L"OpenList",L"http://127.0.0.1:5244"}};
     if(!std::filesystem::exists(file_))return;
     try {
@@ -231,7 +231,10 @@ Library::Library(std::filesystem::path state_file,Transport transport):file_(sta
             Require(loaded.size()<64,L"媒体来源过多");Profile p;p.id=Field(node,"id");
             Require(!p.id.empty()&&p.id.size()<=80&&p.id.find_first_not_of(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")==p.id.npos&&ids.insert(p.id).second,L"媒体来源标识无效");
             const auto provider=node["provider"].kind==Json::number?node["provider"].Integer():p.id==L"openlist"?1:0;Require(provider<=1,L"媒体来源类型无效");p.provider=static_cast<Provider>(provider);
-            p.name=Field(node,"name");if(p.name.empty())p.name=p.provider==Provider::OpenList?L"OpenList":L"Navidrome / OpenSubsonic";
+            p.name=Field(node,"name");
+            if(p.name.empty()||(p.provider==Provider::Subsonic&&
+                (p.name==L"OpenSubsonic / Navidrome"||p.name==L"Navidrome / OpenSubsonic")))
+                p.name=p.provider==Provider::OpenList?L"OpenList":L"OpenSubsonic";
             p.url=NormalizeUrl(Field(node,"url"));p.username=Field(node,"username");p.secret=Field(node,"secret");p.root=Field(node,"root");
             p.directory_password=Field(node,"directoryPassword");p.proxy=node["proxy"].True();
             const auto auth=node["auth"].Integer();Require(auth<=3,L"无效认证方式");p.auth=static_cast<Auth>(auth);loaded.push_back(std::move(p));
@@ -266,7 +269,7 @@ void Library::Save(const std::vector<Profile>& profiles,unsigned active) {
     Require(MoveFileExW(temp.c_str(),file_.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE,L"配置保存失败",STG_E_WRITEFAULT);
     std::lock_guard lock(mutex_);profiles_=profiles;active_profile_=active;sessions_.clear();load_error_.clear();
 }
-Profile NewProfile(Provider provider){Profile p;p.provider=provider;p.id=L"source-"+Salt();p.name=provider==Provider::OpenList?L"OpenList":L"Navidrome / OpenSubsonic";p.url=provider==Provider::OpenList?L"http://127.0.0.1:5244":L"http://127.0.0.1:4533";p.auth=provider==Provider::OpenList?Auth::Guest:Auth::Password;return p;}
+Profile NewProfile(Provider provider){Profile p;p.provider=provider;p.id=L"source-"+Salt();p.name=provider==Provider::OpenList?L"OpenList":L"OpenSubsonic";p.url=provider==Provider::OpenList?L"http://127.0.0.1:5244":L"http://127.0.0.1:4533";p.auth=provider==Provider::OpenList?Auth::Guest:Auth::Password;return p;}
 void Library::SelectProfile(const std::wstring& id){auto profiles=Profiles();auto it=std::find_if(profiles.begin(),profiles.end(),[&](const auto& p){return p.id==id;});Require(it!=profiles.end(),L"媒体来源已不存在，请重新选择");Save(profiles,static_cast<unsigned>(it-profiles.begin()));}
 std::wstring Library::SubsonicUrl(const Profile& p,const wchar_t* method,const std::wstring& args) {
     auto base=NormalizeUrl(p.url);if(!base.ends_with(L"/rest")&&!base.ends_with(L"/@rest"))base+=L"/rest";

@@ -65,7 +65,19 @@ HRESULT WINAPI Create(const ttp_browser_host* h,const ttp_browser_config* c,void
             m->host.media_source_version=h->media_source_version;
         if(h->size>=offsetof(ttp_browser_host,open_media_settings)+sizeof(h->open_media_settings))
             m->host.open_media_settings=h->open_media_settings;
+        if(h->size>=offsetof(ttp_browser_host,set_window_visible)+sizeof(h->set_window_visible))
+            m->host.set_window_visible=h->set_window_visible;
+        if(h->size>=offsetof(ttp_browser_host,track_popup_menu)+sizeof(h->track_popup_menu))
+            m->host.track_popup_menu=h->track_popup_menu;
+        if(h->size>=offsetof(ttp_browser_host,open_options)+sizeof(h->open_options))
+            m->host.open_options=h->open_options;
+        if(h->size>=offsetof(ttp_browser_host,get_download_page)+sizeof(h->get_download_page))
+            m->host.get_download_page=h->get_download_page;
+        if(h->size>=offsetof(ttp_browser_host,recognize_page_download)+sizeof(h->recognize_page_download))
+            m->host.recognize_page_download=h->recognize_page_download;
         m->host.size=sizeof(m->host);m->CopyConfig(*c);
+        if(h->size>=offsetof(ttp_browser_host,get_page_script)+sizeof(h->get_page_script))m->host.get_page_script=h->get_page_script;
+        if(h->size>=offsetof(ttp_browser_host,recognize_page_audio)+sizeof(h->recognize_page_audio))m->host.recognize_page_audio=h->recognize_page_audio;
         m->library=std::make_unique<ttpbrowser::media::Library>(m->state_file);
         m->downloads=std::make_unique<ttpbrowser::Downloads>(m->host,m->config);
         m->browser=std::make_unique<ttpbrowser::BrowserWindow>(m->host,m->config,*m->downloads,*m->library);

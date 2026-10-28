@@ -26,16 +26,24 @@ public:
     HRESULT ExternalDispatch(IDispatch**);
 private:
     struct Action {
-        enum Kind { Submit, Download, Setup, Hyperlink } kind{};
+        enum Kind { Submit, Download, PackageDownload, Setup, Hyperlink } kind{};
         std::vector<BrowserTrack> tracks;
         int modes[3]{};
         std::wstring a, b, c;
         uint64_t document_generation{};
+        bool page_action{};
     };
     ttp_browser_host host_{};
     Downloads& downloads_;
     std::unique_ptr<MediaSurface> media_view_;
     bool personal_view_{};
+    bool download_page_view_{};
+    std::wstring download_page_name_,download_page_url_;
+    void DownloadPageView();
+    void RefreshDownloadPage();
+    bool InterceptPageDownload(const std::wstring& page,const std::wstring& target);
+    void PageMessage(const std::wstring& page,const std::wstring& json);
+    void PageResult(HRESULT result,const wchar_t* success);
     void PersonalView(bool);
     HWND window_{}, tooltip_{}, error_panel_{}, error_text_{}, retry_button_{};
     HINSTANCE instance_{};
@@ -47,6 +55,8 @@ private:
     bool link_transition_{}, link_hover_{}, link_cycle_done_{};
     bool autostart_{}, downloads_view_{}, can_back_{}, can_forward_{}, browser_ready_{}, modern_attempt_{}, error_visible_{}, destroying_{}, loading_{}, first_position_{true};
     bool topmost_{};
+    bool hide_requested_{};
+    bool popup_menu_active_{};
     BYTE opacity_{255};
     uint32_t engine_{};
     int hover_{-1}, pressed_{-1};
@@ -69,6 +79,7 @@ private:
     void BorderContextMenu(POINT);
     void SwitchView(bool);
     void StateChanged();
+    void SetVisible(bool);
     void ProcessActions();
     HRESULT Queue(Action);
     void NavigationStarting(const std::wstring&);

@@ -17,6 +17,7 @@
 #define TTP_BROWSER_STATE_DOWNLOADS 4u
 #define TTP_BROWSER_STATE_WEBVIEW2 8u
 #define TTP_BROWSER_STATE_IE 16u
+#define TTP_BROWSER_MENU_OPTIONS 0x0905u
 
 enum ttp_browser_control_id {
     TTP_BROWSER_CLOSE, TTP_BROWSER_MUSIC, TTP_BROWSER_DOWNLOADS,
@@ -87,6 +88,22 @@ struct ttp_browser_host {
     uint32_t media_source_version;
     // Optional UI-thread shortcut to Options / Network / Music / Media sources.
     HRESULT (WINAPI* open_media_settings)(void*);
+    // Optional UI-thread visibility transition. S_OK lets the host complete
+    // an asynchronous fade; other results use immediate ShowWindow fallback.
+    HRESULT (WINAPI* set_window_visible)(void*, HWND, BOOL visible);
+    // Optional UI-thread popup tracking with the host's common menu renderer.
+    // The menu is borrowed for this call. S_OK includes cancellation (command 0);
+    // E_NOTIMPL requests native tracking. Menu notifications go to host.owner.
+    HRESULT (WINAPI* track_popup_menu)(void*, HWND, HMENU, POINT, UINT* command);
+    // Optional UI-thread shortcut to Options / Network / Music.
+    HRESULT (WINAPI* open_options)(void*);
+    // Optional component-provided page. S_FALSE means absent.
+    // BSTR outputs belong to the caller; no legacy player bridge is exposed.
+    HRESULT (WINAPI* get_download_page)(void*, BSTR* name, BSTR* url);
+    HRESULT (WINAPI* recognize_page_download)(void*, const wchar_t* page_url,
+        const wchar_t* target_url, BSTR* filename);
+    HRESULT (WINAPI* get_page_script)(void*, BSTR* script);
+    HRESULT (WINAPI* recognize_page_audio)(void*, const wchar_t* page_url, const wchar_t* audio_url);
 };
 // Version 1 hosts predating the optional window-drag callback remain supported.
 #define TTP_BROWSER_HOST_V1_SIZE offsetof(struct ttp_browser_host, adjust_window_rect)

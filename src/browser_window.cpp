@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include "downloads.h"
+#include "download_page.h"
 #include <commctrl.h>
 #include <windowsx.h>
 #include <shlobj.h>
@@ -145,9 +146,13 @@ BrowserWindow::BrowserWindow(const ttp_browser_host& host, const ttp_browser_con
     HMODULE module{}; GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(&BrowserWindow::Proc), &module); instance_ = module;
     media_view_=std::make_unique<MediaSurface>(library,host,downloads,config.state_file,config.engine);
+    RefreshDownloadPage();
     const auto preference=std::filesystem::path(config.state_file).parent_path()/L"PersonalLibrary.enabled";
     personal_view_=!config.home_url || std::wstring(config.home_url)==L"http://mini.qianqian.com/index.html";
-    {std::ifstream saved(preference);char choice{};if(saved.get(choice))personal_view_=choice!='0';}
+    {std::ifstream saved(preference);char choice{};if(saved.get(choice)){
+        download_page_view_=choice=='2'&&!download_page_url_.empty();
+        personal_view_=!download_page_view_&&choice!='0';
+    }}
     personal_view_=personal_view_ && host_.media_source_version!=0;
     state_ = config.initial_state; state_.size = sizeof(state_);
     first_position_ = !ValidBounds(config.initial_state.bounds);
@@ -155,7 +160,7 @@ BrowserWindow::BrowserWindow(const ttp_browser_host& host, const ttp_browser_con
     autostart_ = (state_.flags & TTP_BROWSER_STATE_AUTOSTART) != 0;
     downloads_view_ = (state_.flags & TTP_BROWSER_STATE_DOWNLOADS) != 0;
     bridge_->allowed = [this] {
-        return !destroying_ && window_ && IsWindowVisible(window_) && !downloads_view_ && !personal_view_ && browser_ready_ && backend_ &&
+        return !destroying_ && !hide_requested_ && window_ && IsWindowVisible(window_) && !downloads_view_ && !personal_view_ && !download_page_view_ && browser_ready_ && backend_ &&
             !error_visible_ && !origin_.empty() && HttpOrigin(backend_->Source()) == origin_;
     };
     bridge_->submit = [this](std::vector<BrowserTrack> tracks, int a, int b, int c, bool downloads_request, uint64_t generation) {
@@ -210,13 +215,14 @@ HRESULT BrowserWindow::Configure(const ttp_browser_config& config) {
         profile_ += L"\\TTPlayer";
     }
     profile_ += L"\\MusicWindow.WebView2";
+    RefreshDownloadPage();
     if (window_) {
         SetWindowPos(window_, topmost_ ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         SetLayeredWindowAttributes(window_, skin_.valid ? skin_.transparent_color : RGB(255,0,255), opacity_, LWA_COLORKEY | LWA_ALPHA);
         if (changed_engine && backend_) {
             backend_->Shutdown(); backend_.reset(); browser_ready_ = false;
             if (IsWindowVisible(window_) && !downloads_view_ && !personal_view_) StartBrowser();
-        } else if (changed && backend_) backend_->Navigate(home_url_);
+        } else if (changed && backend_ && !download_page_view_) backend_->Navigate(home_url_);
     }
     return S_OK;
 }
@@ -453,12 +459,17 @@ HRESULT BrowserWindow::StartBrowser(bool force_ie) {
     events.starting = [this](const std::wstring& target) { NavigationStarting(target); };
     events.completed = [this](bool success, const std::wstring& error) { NavigationCompleted(success, error); };
     events.history = [this](bool back, bool forward) { can_back_ = back; can_forward_ = forward; if (window_) InvalidateRect(window_, nullptr, FALSE); };
-    events.trusted = [this](const std::wstring& target) { return !origin_.empty() && HttpOrigin(target) == origin_; };
+    events.trusted = [this](const std::wstring& target) { return !download_page_view_ && !origin_.empty() && HttpOrigin(target) == origin_; };
+    if(download_page_view_)events.intercept_download=[this](const std::wstring& page,const std::wstring& target){return InterceptPageDownload(page,target);};
+    if(download_page_view_&&host_.get_page_script&&host_.recognize_page_audio) {
+        BSTR script{};if(host_.get_page_script(host_.context,&script)==S_OK&&script)events.adapter_script.assign(script,SysStringLen(script));SysFreeString(script);
+        if(!events.adapter_script.empty())events.adapter_message=[this](const std::wstring& page,const std::wstring& json){PageMessage(page,json);};
+    }
     events.download = [this](const std::wstring& source) {
         Action action; action.kind = Action::Download; BrowserTrack track; track.source = source;
         action.tracks.push_back(std::move(track)); Queue(std::move(action));
     };
-    const HRESULT hr = backend_->Start(window_, ContentRect(), external_.Get(), profile_, std::move(events));
+    const HRESULT hr = backend_->Start(window_, ContentRect(), download_page_view_?nullptr:external_.Get(), profile_, std::move(events));
     if (FAILED(hr)) {
         const bool retry_ie = modern_attempt_ && !force_ie && engine_ == 0; backend_->Shutdown(); backend_.reset();
         if (retry_ie) return StartBrowser(true);
@@ -466,7 +477,7 @@ HRESULT BrowserWindow::StartBrowser(bool force_ie) {
     }
     backend_->Visible(!downloads_view_ && !personal_view_); loading_ = true;
     SetTimer(window_, kNavigationTimer, 30000, nullptr);
-    return backend_->Navigate(current_url_.empty() ? home_url_ : current_url_);
+    return backend_->Navigate(current_url_.empty() ? (download_page_view_?download_page_url_:home_url_) : current_url_);
 }
 void BrowserWindow::NavigationStarting(const std::wstring& target) {
     ++bridge_->document_generation;
@@ -499,7 +510,7 @@ void BrowserWindow::Error(const std::wstring& message) {
 }
 void BrowserWindow::Retry() {
     if (!backend_ || !browser_ready_) { StartBrowser(); return; }
-    const HRESULT hr = backend_->Navigate(current_url_.empty() ? home_url_ : current_url_);
+    const HRESULT hr = backend_->Navigate(current_url_.empty() ? (download_page_view_?download_page_url_:home_url_) : current_url_);
     if (FAILED(hr)) Error(L"无法重新打开音乐网页。");
 }
 void BrowserWindow::SwitchView(bool downloads_view) {
@@ -527,23 +538,87 @@ void BrowserWindow::SwitchView(bool downloads_view) {
     InvalidateRect(window_, nullptr, FALSE); StateChanged();
 }
 void BrowserWindow::PersonalView(bool personal) {
+    if(download_page_view_){if(backend_)backend_->Shutdown();backend_.reset();browser_ready_=false;current_url_.clear();}
+    download_page_view_=false;
     ++bridge_->document_generation;personal_view_=personal;
     const auto file=std::filesystem::path(state_file_).parent_path()/L"PersonalLibrary.enabled";
     std::error_code error;
     std::filesystem::create_directories(file.parent_path(),error);std::ofstream marker(file);marker<<(personal?'1':'0');
     SwitchView(false);
 }
+void BrowserWindow::DownloadPageView() {
+    RefreshDownloadPage();
+    if(download_page_url_.empty())return;
+    if(!download_page_view_){
+        ++bridge_->document_generation;
+        if(backend_)backend_->Shutdown();backend_.reset();browser_ready_=false;
+        current_url_=download_page_url_;can_back_=can_forward_=false;
+    }
+    download_page_view_=true;personal_view_=false;
+    const auto file=std::filesystem::path(state_file_).parent_path()/L"PersonalLibrary.enabled";
+    std::error_code error;std::filesystem::create_directories(file.parent_path(),error);std::ofstream(file)<<'2';
+    SwitchView(false);
+}
+void BrowserWindow::RefreshDownloadPage() {
+    const auto page=GetDownloadPage(host_);
+    const bool available=!page.name.empty()&&!HttpOrigin(page.url).empty();
+    download_page_name_=available?page.name:L"";
+    download_page_url_=available?page.url:L"";
+    if(!available&&download_page_view_) {
+        if(window_)PersonalView(host_.media_source_version!=0);
+        else {download_page_view_=false;personal_view_=host_.media_source_version!=0;current_url_.clear();}
+    }
+}
+bool BrowserWindow::InterceptPageDownload(const std::wstring& page,const std::wstring& target) {
+    if(!download_page_view_||destroying_||!host_.recognize_page_download)return false;
+    BSTR filename{};const auto hr=host_.recognize_page_download(host_.context,page.c_str(),target.c_str(),&filename);
+    if(hr!=S_OK){SysFreeString(filename);return false;}
+    Action action;action.kind=Action::PackageDownload;action.a=target;action.page_action=true;
+    if(filename)action.b.assign(filename,SysStringLen(filename));SysFreeString(filename);
+    const auto queued=Queue(std::move(action));if(FAILED(queued))PageResult(queued,L"");return true;
+}
+void BrowserWindow::PageMessage(const std::wstring& page,const std::wstring& json) {
+    if(!download_page_view_||destroying_||hide_requested_||downloads_view_||!backend_||json.size()>32768||
+       HttpOrigin(page)!=HttpOrigin(download_page_url_)||HttpOrigin(backend_->Source())!=HttpOrigin(download_page_url_)||GetDownloadPage(host_).url.empty())return;
+    try {
+        const auto value=ttplayer::core::JsonReader(media::Utf8(json)).Read();
+        if(value["type"].String()!="ttp-sayobot")return;
+        const auto url=media::Wide(value["url"].String());if(url.empty()||url.size()>8192||url.find(L'\0')!=url.npos)return;
+        if(value["kind"].String()=="download") {if(!InterceptPageDownload(page,url))PageResult(E_INVALIDARG,L"");return;}
+        if(value["kind"].String()!="play"||!host_.recognize_page_audio||host_.recognize_page_audio(host_.context,page.c_str(),url.c_str())!=S_OK)return;
+        BrowserTrack track;track.source=url;track.title=media::Wide(value["title"].String());track.artist=media::Wide(value["artist"].String());track.tid=media::Wide(value["tid"].String());
+        for(const auto* field:{&track.title,&track.artist,&track.tid})if(field->size()>1024||field->find(L'\0')!=field->npos)return;
+        if(track.title.empty())return;
+        Action action;action.kind=Action::Submit;action.page_action=true;action.document_generation=bridge_->document_generation;
+        action.modes[1]=1;action.modes[2]=1;action.tracks.push_back(std::move(track));
+        const auto queued=Queue(std::move(action));if(FAILED(queued))PageResult(queued,L"");
+    }catch(...) {PageResult(E_INVALIDARG,L"");}
+}
+void BrowserWindow::PageResult(HRESULT result,const wchar_t* success) {
+    std::wstring message=success;
+    if(FAILED(result)){wchar_t code[32]{};swprintf_s(code,L"0x%08lX",static_cast<unsigned long>(result));
+        message=std::wstring(L"操作失败（")+code+L"）。请检查“选项 → 网络连接 → 音乐窗 → 歌曲下载”中的保存目录。";}
+    if(download_page_view_&&backend_&&SUCCEEDED(backend_->PostJson(media::Wide("{\"type\":\"ttp-sayobot-result\",\"message\":"+media::Quote(message)+"}"))))return;
+    if(FAILED(result))MessageBoxW(window_,message.c_str(),L"音乐窗",MB_OK|MB_ICONERROR);
+}
+void BrowserWindow::SetVisible(bool visible) {
+    hide_requested_ = !visible;
+    if (!window_) return;
+    if (!host_.set_window_visible ||
+        host_.set_window_visible(host_.context, window_, visible) != S_OK)
+        ShowWindow(window_, visible ? SW_SHOWNORMAL : SW_HIDE);
+}
 HRESULT BrowserWindow::Show(uint32_t view) {
     if (view > TTP_BROWSER_VIEW_HIDE) return E_INVALIDARG;
-    if (view == TTP_BROWSER_VIEW_HIDE || (view == TTP_BROWSER_VIEW_TOGGLE && window_ && IsWindowVisible(window_))) {
+    if (view == TTP_BROWSER_VIEW_HIDE || (view == TTP_BROWSER_VIEW_TOGGLE && !hide_requested_ && window_ && IsWindowVisible(window_))) {
         ++bridge_->document_generation;
-        if (window_) ShowWindow(window_, SW_HIDE); StateChanged(); return S_OK;
+        SetVisible(false); StateChanged(); return S_OK;
     }
     const HRESULT hr = EnsureWindow(); if (FAILED(hr)) return hr;
-    ShowWindow(window_, SW_SHOWNORMAL);
     if (view == TTP_BROWSER_VIEW_MUSIC) SwitchView(false);
     else if (view == TTP_BROWSER_VIEW_DOWNLOADS) SwitchView(true);
     else SwitchView(downloads_view_);
+    SetVisible(true);
     UpdateLinkTimer();
     SetForegroundWindow(window_); StateChanged(); return S_OK;
 }
@@ -564,7 +639,10 @@ void BrowserWindow::ProcessActions() {
     // One action per window message leaves input responsive for large batches.
     Action action = std::move(actions_.front()); actions_.pop_front(); HRESULT hr = S_OK;
     if (action.document_generation && action.document_generation != bridge_->document_generation) return;
-    if (action.kind == Action::Submit) {
+    if(action.kind==Action::PackageDownload){
+        hr=downloads_.EnqueueFile(action.a,action.b,nullptr);
+        if(SUCCEEDED(hr)){status_=L"已加入下载管理";downloads_.Refresh();}
+    } else if (action.kind == Action::Submit) {
         std::vector<ttp_browser_track> tracks; tracks.reserve(action.tracks.size());
         for (const auto& track : action.tracks) tracks.push_back(track.Borrow());
         hr = host_.submit_tracks ? host_.submit_tracks(host_.context, tracks.data(), static_cast<uint32_t>(tracks.size()),
@@ -583,6 +661,7 @@ void BrowserWindow::ProcessActions() {
         RefreshLinkHover();ResetLinkAnimation();UpdateTooltips();
     }
     if (FAILED(hr)) { wchar_t code[32]{}; swprintf_s(code, L"0x%08lX", static_cast<unsigned long>(hr)); status_ = std::wstring(L"操作未完成：") + code; }
+    if(action.page_action)PageResult(hr,action.kind==Action::PackageDownload?L"已加入下载管理":L"已加入播放列表并播放");
     if (window_) InvalidateRect(window_, nullptr, FALSE);
 }
 void BrowserWindow::StateChanged() {
@@ -593,7 +672,7 @@ HRESULT BrowserWindow::GetState(ttp_browser_state* state) const {
     if (!state || state->size < sizeof(*state)) return E_INVALIDARG;
     *state = state_; state->size = sizeof(*state);
     if (window_) GetWindowRect(window_, &state->bounds);
-    state->flags = (window_ && IsWindowVisible(window_) ? TTP_BROWSER_STATE_VISIBLE : 0) |
+    state->flags = (!hide_requested_ && window_ && IsWindowVisible(window_) ? TTP_BROWSER_STATE_VISIBLE : 0) |
         (autostart_ ? TTP_BROWSER_STATE_AUTOSTART : 0) | (downloads_view_ ? TTP_BROWSER_STATE_DOWNLOADS : 0) |
         (personal_view_ ? (media_view_->IsWebView()?TTP_BROWSER_STATE_WEBVIEW2:media_view_->IsIe()?TTP_BROWSER_STATE_IE:0) :
          browser_ready_ ? modern_attempt_ ? TTP_BROWSER_STATE_WEBVIEW2 : TTP_BROWSER_STATE_IE : 0);
@@ -672,6 +751,7 @@ void BrowserWindow::PaintLink(HDC dc,RECT rect) {
     RestoreDC(dc,saved);
 }
 void BrowserWindow::BorderContextMenu(POINT point) {
+    if(popup_menu_active_)return;
     if(point.x==-1 && point.y==-1) {
         point={20,20};ClientToScreen(window_,&point);
     } else {
@@ -681,17 +761,33 @@ void BrowserWindow::BorderContextMenu(POINT point) {
         if(BackgroundHit(client)==HTCLIENT)return;
     }
     SendMessageW(window_,WM_CANCELMODE,0,0);
+    RefreshDownloadPage();
     const HMENU menu=CreatePopupMenu();if(!menu)return;
     AppendMenuW(menu,MF_STRING|(downloads_view_?0:MF_CHECKED),TTP_BROWSER_MUSIC+1,L"音乐窗");
     AppendMenuW(menu,MF_STRING|(downloads_view_?MF_CHECKED:0),TTP_BROWSER_DOWNLOADS+1,L"下载管理");
     if(host_.media_source_version) {
         AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
-        AppendMenuW(menu,MF_STRING|(!downloads_view_&&personal_view_?MF_CHECKED:0),5301,L"个人媒体库（OpenSubsonic / OpenList）");
-        AppendMenuW(menu,MF_STRING|(!downloads_view_&&!personal_view_?MF_CHECKED:0),5302,L"音乐网页");
+        AppendMenuW(menu,MF_STRING|(!downloads_view_&&personal_view_?MF_CHECKED:0),5301,L"个人媒体库");
     }
-    const UINT selected=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,window_,nullptr);
+    if(!download_page_name_.empty())AppendMenuW(menu,MF_STRING|(!downloads_view_&&download_page_view_?MF_CHECKED:0),5302,download_page_name_.c_str());
+    AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+    AppendMenuW(menu,MF_STRING|((host_.open_options||host_.open_media_settings)?0:MF_GRAYED),
+        TTP_BROWSER_MENU_OPTIONS,L"选项(&P)...");
+    UINT selected{};
+    popup_menu_active_=true;
+    const HRESULT tracked=host_.track_popup_menu
+        ?host_.track_popup_menu(host_.context,window_,menu,point,&selected):E_NOTIMPL;
+    if(tracked==E_NOTIMPL)
+        selected=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,window_,nullptr);
+    popup_menu_active_=false;
     DestroyMenu(menu);
-    if(selected==5301 || selected==5302){PersonalView(selected==5301);return;}
+    if(selected==TTP_BROWSER_MENU_OPTIONS){
+        const auto open=host_.open_options?host_.open_options:host_.open_media_settings;
+        if(open)open(host_.context);
+        return;
+    }
+    if(selected==5301){PersonalView(true);return;}
+    if(selected==5302){DownloadPageView();return;}
     if(selected==TTP_BROWSER_MUSIC+1 || selected==TTP_BROWSER_DOWNLOADS+1)
         Activate(static_cast<int>(selected)-1);
 }
@@ -847,6 +943,20 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     case WM_CONTEXTMENU:
         if(reinterpret_cast<HWND>(wp)==hwnd)self->BorderContextMenu({GET_X_LPARAM(lp),GET_Y_LPARAM(lp)});
         return 0;
+    case WM_DRAWITEM:
+    case WM_MEASUREITEM:
+    case WM_MENUCHAR:
+    case WM_INITMENUPOPUP:
+    case WM_MENUSELECT:
+    case WM_EXITMENULOOP:
+        // Keep this window as the popup owner while the host owns the shared
+        // menu images, measurement and drawing, as with the lyrics window.
+        if(self->popup_menu_active_ && self->host_.track_popup_menu && IsWindow(self->host_.owner)) {
+            if(message==WM_DRAWITEM && (!lp || reinterpret_cast<DRAWITEMSTRUCT*>(lp)->CtlType!=ODT_MENU))break;
+            if(message==WM_MEASUREITEM && (!lp || reinterpret_cast<MEASUREITEMSTRUCT*>(lp)->CtlType!=ODT_MENU))break;
+            return SendMessageW(self->host_.owner,message,wp,lp);
+        }
+        break;
     case WM_NOTIFY: {
         const auto* header=reinterpret_cast<NMHDR*>(lp);
         if(header && header->hwndFrom==self->tooltip_ && header->code==TTN_GETDISPINFOW && header->idFrom==TTP_BROWSER_LINK+1) {
@@ -863,6 +973,7 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
         return 0;
     } break;
     case kActions: self->ProcessActions(); return 0;
+    case kOpenDownloadPage: self->DownloadPageView(); return 0;
     case kFallback: if (!self->destroying_ && !self->personal_view_ && !self->browser_ready_) self->StartBrowser(true); return 0;
     case WM_DESTROY:
         self->destroying_ = true; self->bridge_->alive = false; self->actions_.clear();

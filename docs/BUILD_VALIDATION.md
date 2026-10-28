@@ -1,5 +1,123 @@
 # 构建与发行验证记录
 
+## 恢复 Sayobot 页面内试听 / ttp_osu 2026-10-28 p2
+
+原因：p1 为避免详情播放在网页与主程序同时出声，全局阻止了 `HTMLMediaElement.prototype.play`，也阻止了卡片试听和网页播放器的继续播放。
+
+p2 恢复浏览器原生播放调用及其 Promise/错误行为，只观察实际试听媒体对象；详情「播放」仍在捕获阶段接管。详情歌曲信息成功取得、准备提交播放器时，暂停已有网页试听；优先调用站点可见的暂停按钮同步图标。没有修改 WebView2 静音、元素静音或音量。卡片试听不提交到主程序播放列表。
+
+真实 WebView2 隔离宿主点击 SID 2566051 的「试听」，请求 `https://cdnx.sayobot.cn:25225/preview/2566051.mp3`，媒体实际为 `paused=false`、`currentTime=0.312733`、`muted=false`、`volume=0.5`。验证时间继续推进、网页按钮暂停/继续、详情转入原生时试听停止且没有新增网页 play 调用、仅一次原生歌曲提交及正确歌名/歌手，再次卡片试听仍在网页播放且不新增提交。插件 ABI 探针 46/46，通过编译与 XP/Win7 静态导入检查；没有重复旧系统虚拟机和曲包下载测试。
+
+仅更新 `rebuild/build/Release/AddIn/ttp_osu.dll` 为 `2026.10.28p2`，主程序保持 p5、音乐窗保持 p9。包为相邻插件的 `build/Release/ttp_osu-2026.10.28p2.zip`。证据：`out/sayobot-preview-20261028p2` 内的 `live/preview/driver.log`、`host.log`、`web-preview-playing.png`、`probe.log`、构建日志、部署前 DLL 备份和 `deployment.json`。
+
+## Sayobot 详情播放的列表标题 / 主程序 2026-10-28 p5
+
+修复主程序播放列表的显示判定：此前仅个人媒体库内部地址和 osu! 本地媒体库在文件名模式下使用服务歌曲信息，Sayobot 的真实 HTTPS 音频地址虽已收到标题/歌手，却回退为完整 URL。现在对带 `TTPlayer.Tid` 的 HTTP/HTTPS 音乐窗条目同样采用歌手/标题；有效的自定义标签格式继续优先。普通粘贴 URL、没有来源标识的网络地址和本地文件维持原显示规则。
+
+本次改动为 `track_metadata.h` 的音乐窗条目识别及 `player_window_playlist.cpp` 的标签字段回退和标题格式化，不修改 URL、下载逻辑或网页脚本。既有条目只要仍保存歌曲信息及来源标识，重新显示即可生效。
+
+- 真实 PlayerWindow 存在/缺失/不兼容三组宿主测试通过；新增 Sayobot 实际入列、文件名模式、自定义/空/无效标签格式、标题单独存在、解码标签快照更新、TTBL 保存重载及普通 URL/本地文件对照。
+- 隔离真实播放器经 `SubmitMusicBrowserTracks(..., 0, 1, 1)` 接收与详情页相同的 SID 2566051、BID 5707607 完整音频地址。通过实际 `ttp_https` 网络流及解码器播放超过 1 秒，在打开完成与信息刷新后检查实际列表文本为 `Aurora Sky - Butterfly In Ashes`，再次保存/重载 TTBL 仍一致。此测试直接覆盖主程序收到详情播放请求后的流程；未重新执行网页点击或曲包下载测试。
+- 主程序及别名 EXE 更新为 `2026.10.28p5`，XP/Win7 静态导入检查通过。音乐窗保持 p9、osu 插件保持 p1，未重复旧系统虚拟机测试。
+
+证据：`out/sayobot-title-20261028p5/host.log`、`live/results.log`、`live/sayobot-playlist.bmp`、构建日志及 `deployment.json`。旧主程序保存在 `deployment-before/TTPlayerRebuild.exe`，用户配置与媒体来源文件未改写。
+
+## Sayobot 下载、详情播放与服务器文件名 / 2026-10-28 p9
+
+配套 `TTPlayerRebuild.exe 2026.10.28p4`、`ttpbrowser.dll 2026.10.28p9`、`AddIn/ttp_osu.dll 2026.10.28p1`。插件下载页 ABI 2 追加站点脚本和音频识别，保留 ABI 1 前缀；主程序及音乐窗按字段大小检测可选回调。
+
+- 修复卡片云下载和详情「下载／无视频／mini」的接管。此前空的下载目录导致入队失败但网页不显示错误；现在恢复主程序原生默认目录，操作结果短暂提示。详情按钮在捕获阶段接管，不依赖网页的下载冷却计时。
+- 详情「播放」读取当前难度对应的完整音频、标题和歌手，追加当前播放列表并立即播放。阻止网页原处理函数及 HTML 媒体播放调用；测试中的独立 `new Audio()` 保持 `muted=false`、音量 `0.41`、`paused=true`。没有调用 WebView2 静音，也不修改媒体或系统音量。
+- 宿主从 `ttp_https` 最终响应的 `Content-Disposition` 取文件名，经 `IStream::Stat` 返回下载队列，不额外请求。采用 `filename*` 的 UTF-8/Latin-1 解码与 `filename` 回退；校验 Windows 文件名与 `.osz` 扩展。仅曲包启用服务器命名。未启用覆盖时重名自动编号，最终名字同步下载列表和持久记录，同 URL 重复点击仍复用任务。
+- 按用户提示扩大隔离测试音乐窗至 1300×1040，实际点击卡片与详情按钮。未修改站点右下角悬浮按钮。首次追加截图曲包的测试遇到站点重新弹出的说明对话框，修正测试等待/点击「确定」后最终通过。
+
+最终实际下载结果（四个 ZIP 全部通过成员 CRC 校验，包含 `.osu` 谱面）：
+
+| 文件 | 字节 | 来源 |
+| --- | ---: | --- |
+| `2562231 glass beach - soft!!!!!!.osz` | 13,756,035 | 用户截图卡片，同浏览器服务器名称 |
+| `2566051 Aurora Sky - Butterfly In Ashes.osz` | 43,119,469 | 卡片及详情完整包 |
+| `2566051 Aurora Sky - Butterfly In Ashes (1).osz` | 8,158,372 | 无视频包，同名自动编号 |
+| `2566051 Aurora Sky - Butterfly In Ashes (2).osz` | 5,663,922 | mini 包，同名自动编号 |
+
+验证：插件 ABI 探针 46/46；音乐窗 CTest 7/7（新增服务器命名、中文、畸形编码、危险路径、重名、队列持久化与普通音乐命名不受影响的用例）；独立发行 DLL 合同测试通过。此前本轮 PlayerWindow 组件存在/缺失/不兼容三组通过，包含空下载目录恢复。最终真实 WebView2 宿主验证正确歌名/歌手、追加并立即播放模式、一次显式播放提交、外域音频拒绝、原生音频流读取和 Seek、卡片及三个详情下载按钮。未重复 XP/Win7 虚拟机实测；集成与独立 DLL 的 XP/Win7 静态导入审计通过，第三方现代网页的旧 IE 运行情况未据此宣称通过。
+
+证据：`out/sayobot-fix-20261028p9` 内的 `probe-final.log`、`ctest-filename.log`、`host2`、`detail-filename-final/detail/driver.log`、`host.log`、`detail-play-download.png`、`download-files.json`、`standalone-contract.log`、构建日志及 `deployment.json`。运行包为 `build/Release/ttpbrowser-2026.10.28p9.zip` 和相邻插件的 `build/Release/ttp_osu-2026.10.28p1.zip`；未发布远端发行。
+
+已更新正式 `rebuild/build/Release` 三个组件。最终复制前后的六个现有 XML/媒体来源/页面选择/下载记录文件哈希一致。最终 DLL 复制前备份在 `deployment-before-final`；主程序此前已由构建更新，因此该目录不是主程序 p3 的历史备份。部署 DLL 大小 749,568 字节，SHA-256 `0b86e980ff0de7c974db0f986a00eb522c81c5523a797aa10dbecdf6a1ea54b0`。
+
+## Sayobot 下载页与游戏程序识别 / 2026-10-28 p8
+
+配套 `TTPlayerRebuild.exe 2026.10.28p3`、`ttpbrowser.dll 2026.10.28p8`、`AddIn/ttp_osu.dll 2026.10.28`。插件提供站点名称、首页和 OSZ 下载 URL 识别；音乐窗负责网页与下载队列。主程序复用插件安装接口的身份判断，osu!／lazer 配置至少一个识别成功才显示边框及齿轮入口。缺失、旧组件、两路径无效均隐藏；修改路径后动态同步，已打开且失效的镜像站返回个人媒体库，保存的镜像站选择同样受启动检查约束。
+
+- 插件实际 DLL 的下载页 ABI 探针 34 项通过：完整/无视频/精简曲包、试听排除、域名/路径检查、参数与缓冲边界。
+- CTest 7/7，通过新增可选回调的截断结构与保护页边界、OSZ 文件保存和错误文件名拒绝；PlayerWindow 的音乐窗组件存在、缺失、不兼容三组集成测试通过。
+- 六组隔离宿主使用实际插件和本机实际游戏程序：组件缺失、旧版、两路径无效、仅 stable 有效、仅 lazer 有效、动态失效与恢复。验证两个入口、已打开页面回退和恢复。
+- 真实 WebView2 页面点击试听，观察到浏览器请求 `cdnx.sayobot.cn:25225/preview/2562231.mp3`；点击下载取得 `Sayobot 2562231.osz`（13,756,035 字节），状态 complete，ZIP 文件头正确，页面留在原站点，播放列表提交次数为 0。第三方页面无 `window.external.ttplayer`。测试脚本曾因站点延迟弹窗及脱离 DOM 的 Audio 对象假设失败，修正测试等待与请求观测后通过；未据此修改第三方页面。
+- 主程序、集成/独立音乐窗与插件编译通过；XP/Win7 静态导入审计、独立音乐窗单 DLL ZIP 校验通过。没有执行本次 XP/Win7 虚拟机实测，现代第三方站点的 IE 兼容性不作保证。
+
+证据位于忽略目录 `out/osu-download-20261028`：`probe.log`、`ctest.log`、`host1`、`matrix-final`、`live4`、构建日志和部署清单。运行包分别为 `build/Release/ttpbrowser-2026.10.28p8.zip` 与相邻插件的 `build/Release/ttp_osu-2026.10.28.zip`。未发布远端发行。
+
+已更新 `rebuild/build/Release` 的主程序、音乐窗和 `AddIn/ttp_osu.dll`，旧组件保存在上述证据目录的 `deployment-before`。部署前后播放器 XML、媒体来源数据库和页面选择文件哈希一致；最终版本与 SHA-256 见 `deployment.json`。
+
+## 边框菜单统一与打开状态恢复 / 2026-10-28 p7
+
+更新 `TTPlayerRebuild.exe 2026.10.28p2` 与 `ttpbrowser.dll 2026.10.28p7`。音乐窗边框菜单使用主程序现有的菜单绘制、图标栏、分隔线和快捷键处理；新增「选项(P)…」，使用歌词秀等窗口菜单的设置图标并直接打开「网络连接 → 音乐窗」，移除「音乐网页」。右下角齿轮的设置入口继续直达媒体来源。菜单回调按宿主结构大小检测，旧宿主继续使用原生弹出菜单；没有设置回调时禁用选项项。
+
+启动时恢复已保存的 `BrowserVisible`：上次打开则打开，上次关闭则关闭；新配置仍默认关闭。显式启用 `BrowserAutoStartup` 时强制显示，迷你模式的临时隐藏不覆盖正常模式记录。
+
+- CTest 7/7 通过，包含新增回调的截断结构/保护页边界、选项分派、菜单取消及旧宿主回退。
+- 实际 PlayerWindow 的 DLL 存在、缺失、不兼容三种隔离测试通过。真实菜单跟踪验证所有条目进入共用绘制、绘制/测量消息转发、设置图标与歌词菜单相同、按 P 打开「网络连接 → 音乐窗」与重复打开后的资源清理；保存打开/关闭并重建主程序验证状态恢复，关闭音乐窗后保存值为关闭。
+- 正式 Release 程序中右键打开音乐窗菜单并点击「选项(P)…」，确认菜单样式与选项窗口正确。截图为 `out/menu-state-20261028p7/border-menu.png` 和 `options.png`。
+- 集成 EXE、集成/独立 DLL 构建和单 DLL ZIP 校验通过；XP/Win7 静态导入审计通过。本次没有重复旧系统虚拟机实测。
+
+已部署到 `rebuild/build/Release` 并启动预览。日志、部署前备份和最终哈希位于 `out/menu-state-20261028p7`，发行包为 `build/Release/ttpbrowser-2026.10.28p7.zip`，未发布远端发行。
+
+| 文件 | SHA-256 |
+| --- | --- |
+| Release `TTPlayerRebuild.exe` | `71ab024b924a0df5911f2ce089913a5ef82fce70c41536a4caed90460cdedfad` |
+| Release `ttpbrowser.dll` | `19948273af0d222164c9b781bbfddcbe31f2ada95042d4de9a6638772553cd72` |
+| `ttpbrowser-2026.10.28p7.zip` | `cc073c991e049497f77081eb88f5314909ddb0240f5780485a72a1fe3eccd061` |
+
+## 移除网页底部状态字段 / 2026-10-28 p6
+
+`ttpbrowser.dll 2026.10.28p6` 移除 WebView2 与 IE 页面的底部状态文字节点和预留空间。播放、添加、下载成功后不再增加一行；翻页、操作按钮和齿轮保持同一行。读取进度继续使用列表内的加载文字，操作错误在列表内显示，不占用底部工具栏。
+
+- 真实 WebView2 宿主通过播放、添加、下载、来源菜单、搜索及 320～680 像素布局检查；操作前后底部高度一致，状态字段不存在，下载以宿主响应和实际文件验证。截图：`out/media-status-20261028p6/live/compact-songs.png`。
+- 本机强制 IE 页面通过列表、添加、下载、来源切换、设置入口及导航限制检查；截图：`ie/ie-navidrome.png`、`ie/ie-openlist.png`。首次使用未定义的 `--ie` 参数实际选择了自动引擎，已按现有测试入口不传第三参数重跑，最终日志为 `ie-final.log`。
+- 集成及独立 DLL 构建、静态 XP/Win7 导入审计、单 DLL ZIP 校验通过；本次没有重复旧系统虚拟机测试。
+
+已更新 `rebuild/build/Release/ttpbrowser.dll`；主程序保持 `2026.10.28p1`，媒体来源配置未改写。日志、部署前备份及最终哈希位于 `out/media-status-20261028p6`，发行包为 `build/Release/ttpbrowser-2026.10.28p6.zip`。
+
+## 音乐窗淡入淡出、封面悬停与启动默认值 / 2026-10-28 p5
+
+更新 `TTPlayerRebuild.exe 2026.10.28p1` 与 `ttpbrowser.dll 2026.10.28p5`。DLL 通过按 `size` 检测的可选宿主回调请求显示/隐藏，主程序复用现有皮肤窗口动画，遵循「淡入淡出」、透明度和透明色键设置。关闭开始即发布隐藏状态；淡出结束后隐藏 HWND 并恢复配置透明度。菜单、主窗口按钮、F11、关闭按钮和 Esc 共用此路径，快速切换不会留下错误的可见状态。旧宿主缺少回调时保持即时显示/隐藏兼容行为。
+
+专辑、歌手、歌单网格的封面播放按钮默认隐藏，悬停封面时淡入，移出后隐藏；键盘焦点可显示按钮，鼠标点击造成的普通焦点不会使按钮一直显示。按钮隐藏时不截获封面点击。播放后仍保留当前网格。
+
+新配置及缺少 `BrowserAutoStartup` 的旧 XML 默认不在启动时显示音乐窗。显式保存的开关值继续生效，底部复选框仍可修改。实际预览播放器启动后确认音乐窗默认关闭。
+
+- CTest 7/7 通过，包含旧宿主及截断可选回调边界检查。
+- 实际 PlayerWindow 宿主存在/缺失/不兼容三种 DLL 状态通过；新增动画检查覆盖初始/中间/终点透明度、配置透明度恢复、色键保持、关闭/Esc、快速显示/隐藏/显示和关闭动画选项。默认值及缺失 XML 属性为关闭，显式启用保存重载保持启用。
+- 真实 WebView2 页面验证默认隐藏、封面悬停显示、移出隐藏、键盘可达与聚焦显示、点击播放后移出隐藏；原有播放/添加/下载、搜索、来源菜单和窄窗布局检查继续通过。
+- 集成 EXE、集成/独立 DLL 构建和单 DLL ZIP 校验通过；XP/Win7 静态导入审计通过。本次未重复旧系统虚拟机实测。
+
+最终宿主、单元和页面日志：`out/media-fade-20261028p5/host.log`、`ctest.log`、`web-final.log`、`live-final/host-results.log`。悬停前后截图为 `live-final/albums.png`、`live-final/cover-hover.png`。已替换正式预览 EXE/DLL 并启动，来源配置未由本次部署改写；部署前文件在 `deployment-before`，最终版本和哈希见 `artifacts.json`。发行包为 `build/Release/ttpbrowser-2026.10.28p5.zip`，未发布远端发行。
+
+## 播放列表歌曲信息与来源恢复 / 2026-10-28 p4
+
+更新 `TTPlayerRebuild.exe 2026.10.28` 与 `ttpbrowser.dll 2026.10.28p4`。音乐窗提交曲目时，歌曲名、歌手同时写入曲目字段及标签表；播放列表的有效标签格式可直接使用它们。文件名模式或空/无效标签格式下，个人媒体库条目回退为「歌手 - 歌曲名」，缺少歌手时显示歌曲名，OpenList 显示文件名。此前仅保存曲目字段的条目也支持标签格式。普通本地文件保留原有显示规则。
+
+设置界面、默认来源名和菜单统一显示 `OpenSubsonic`。加载旧配置时将两种原组合名称规范为该名称，保留来源 ID、凭据和自定义名称。按用户要求，正式播放器恢复两个原预览来源：OpenSubsonic（本机 Navidrome，`http://127.0.0.1:45331`）及 OpenList（`http://127.0.0.1:52441`）；复用现有隔离服务和原来源标识，继续扫描用户指定的测试音乐目录。
+
+- CTest 7/7 通过，包括旧名称迁移、来源身份与凭据保持。
+- 实际 PlayerWindow 宿主检查 DLL 存在/缺失/不兼容三种状态；标题回归覆盖文件名模式、空标签格式、显式标签格式、旧条目、无歌手、OpenList 文件名、空元数据刷新、TTBL 保存重载和普通本地文件。
+- 真实 Navidrome/OpenList 接口八项通过；WebView2 验证封面播放、单曲播放/添加/下载、来源菜单名称、搜索和布局。原生流读取/Seek、FLAC/M4A 解码及卸载通过。
+- 正式播放器重新启动后，个人媒体库专辑加载正常；此前已加入的《夜航星》显示歌曲信息并实际播放成功。页面播放按钮由隔离的真实 WebView2 宿主验证，正式浏览器子窗口点击受到 computer-use 的跨进程目标限制。截图位于 `out/media-title-20261028p4/deployed`。
+- 集成 EXE、集成/独立 DLL 构建及单 DLL ZIP 校验通过；静态导入审计通过。本次未重复旧系统虚拟机测试。
+
+验证材料位于 `out/media-title-20261028p4`：`host-final.log`、`ctest.log`、`live.log`、`web.log` 和 `live/host-results.log`；部署前 EXE、DLL、媒体配置和 XML 备份位于 `deployment-before`。最终文件哈希为 `artifacts.json`，来源名称/地址的脱敏记录为 `restored-sources.json`。发行包为 `build/Release/ttpbrowser-2026.10.28p4.zip`，未发布远端发行。
+
 ## ttp_https 接入、来源列表绘制与旧系统兼容 / 2026-10-28 p3
 
 `ttpbrowser 2026.10.28p3` 的个人媒体库登录、列表、搜索、封面、歌词和地址解析优先调用 `AddIn/ttp_https.dll` 新增的 ABI 8，支持 HTTP/HTTPS GET、JSON POST 和 Authorization。组件缺失、损坏、接口不足，或组件在发送源站请求前明确要求系统代理处理时，回退 WinINet。TLS/证书失败、超时、取消、HTTP 状态和读取中断均不会触发重发。接口、请求限制和代理行为见相邻仓库的 [HTTP_ABI8.md](../../mbedtlsmin/docs/HTTP_ABI8.md)。音频播放、下载继续使用主程序 ABI 7；历史音乐网页的网络请求仍由浏览器引擎处理。

@@ -137,6 +137,20 @@ HRESULT Downloads::Enqueue(const ttp_browser_track& track,uint64_t* task_id) {
         impl_->Refresh();return S_OK;
     } catch(...) {return ExceptionResult();}
 }
+HRESULT Downloads::EnqueueFile(const std::wstring& source,const std::wstring& filename,uint64_t* task_id) {
+    if(task_id)*task_id=0;
+    try {
+        const auto url=ttplayer::audio::HttpDownloadKey(source);
+        if(url.empty()||filename.empty()||filename.size()>200||
+            filename.find_first_of(L"\\/:*?\"<>|")!=filename.npos||
+            std::any_of(filename.begin(),filename.end(),[](wchar_t c){return c<32;})||
+            _wcsicmp(std::filesystem::path(filename).extension().c_str(),L".osz"))return E_INVALIDARG;
+        if(impl_->folder.empty())return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
+        const auto storage=impl_->queue->StorageResult();if(FAILED(storage))return storage;
+        const auto id=impl_->queue->Enqueue(url,filename,impl_->folder/filename,impl_->replace,L"",L"",true);
+        if(!id)return E_FAIL;if(task_id)*task_id=id;impl_->Refresh();return S_OK;
+    }catch(...){return ExceptionResult();}
+}
 HRESULT Downloads::Prefetch(const wchar_t* url) {
     try {
         auto value=Copy(url);

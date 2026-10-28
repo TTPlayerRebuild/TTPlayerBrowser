@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-27",
+  "date": "2026-10-28",
   "files": [
     {
       "path": "src/audio/legacy_cache.cpp",
@@ -19,7 +19,7 @@
     {
       "path": "include/ttplayer/audio/http_download_queue.h",
       "source": "rebuild/include/ttplayer/audio/http_download_queue.h",
-      "sha256": "6233c9ff34709b643edf8ce0b371e58d42d3600653b8da0949fde933c4f7014c"
+      "sha256": "7eda18ad3fc761eeab65f1acc293c954dce996a8ced621c1e0bb58219c3c5326"
     },
     {
       "path": "include/ttplayer/core/text.h",
@@ -60,6 +60,11 @@
       "path": "include/ttplayer/core/json.h",
       "source": "rebuild/include/ttplayer/core/json.h",
       "sha256": "a7d67e8b5143b762238fc49a0c114668448a48210b818afba2a6fae823af1d2f"
+    },
+    {
+      "path": "include/ttplayer/net/content_disposition.h",
+      "source": "rebuild/include/ttplayer/net/content_disposition.h",
+      "sha256": "c61c6ae439330c30dfa4459f0c9ce9bdd4d3a0d6705fea97c91afd095b6be71b"
     }
   ]
 }

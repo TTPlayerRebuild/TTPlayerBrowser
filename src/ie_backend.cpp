@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 #include <atomic>
 #include <mshtml.h>
+#include <shlwapi.h>
 
 namespace ttpbrowser {
 using Microsoft::WRL::ComPtr;
@@ -56,6 +57,14 @@ class IeBackend final : public BrowserBackend, public std::enable_shared_from_th
     DWORD cookie_{};
     bool closed_{}, failed_navigation_{};
     BrowserEvents events_;
+    HRESULT Execute(const std::wstring& script) {
+        ComPtr<IDispatch> dispatch;ComPtr<IHTMLDocument2> document;ComPtr<IHTMLWindow2> window;
+        if(browser_&&SUCCEEDED(browser_->get_Document(&dispatch))&&dispatch&&SUCCEEDED(dispatch.As(&document))&&
+           SUCCEEDED(document->get_parentWindow(&window))&&window){
+            ATL::CComVariant result;return window->execScript(ATL::CComBSTR(script.c_str()),ATL::CComBSTR(L"JavaScript"),&result);
+        }
+        return E_FAIL;
+    }
     bool IsTop(IDispatch* dispatch) const {
         ComPtr<IUnknown> from, top;
         return dispatch && browser_ && SUCCEEDED(dispatch->QueryInterface(IID_PPV_ARGS(&from))) &&
@@ -67,13 +76,25 @@ class IeBackend final : public BrowserBackend, public std::enable_shared_from_th
             const auto target = VariantText(args->rgvarg[5]);
             const auto* sender = Unwrap(&args->rgvarg[6]);
             const bool top = sender && sender->vt == VT_DISPATCH && IsTop(sender->pdispVal);
+            if(target.starts_with(L"ttpbrowser-action:")) {
+                if(args->rgvarg[0].vt==(VT_BYREF|VT_BOOL))*args->rgvarg[0].pboolVal=VARIANT_TRUE;
+                if(top&&events_.adapter_message&&target.size()<65536) {
+                    auto encoded=target.substr(18);DWORD size=static_cast<DWORD>(encoded.size()+1);std::wstring json(size,L'\0');
+                    if(SUCCEEDED(UrlUnescapeW(encoded.data(),json.data(),&size,URL_UNESCAPE_AS_UTF8))){json.resize(size);events_.adapter_message(Source(),json);}
+                }
+                return S_OK;
+            }
+            if(events_.intercept_download&&events_.intercept_download(Source(),target)){
+                if(args->rgvarg[0].vt==(VT_BYREF|VT_BOOL))*args->rgvarg[0].pboolVal=VARIANT_TRUE;
+                return S_OK;
+            }
             const bool web = !HttpOrigin(target).empty();
             const bool local = !events_.local_document.empty();
             const bool trusted = local ? top && target == events_.local_document : web && events_.trusted && events_.trusted(target);
             // IE shares its OLE external object with documents in the control.
             // Reject unrelated frame navigation so it cannot inherit the native
             // bridge. Same-origin page frames share the top document's authority.
-            if (local ? !trusted : ((!web && target != L"about:blank") || (!top && target != L"about:blank" && !trusted))) {
+            if (local ? !trusted : ((!web && target != L"about:blank") || (external_ && !top && target != L"about:blank" && !trusted))) {
                 if (args->rgvarg[0].vt == (VT_BYREF | VT_BOOL)) *args->rgvarg[0].pboolVal = VARIANT_TRUE;
                 return S_OK;
             }
@@ -84,6 +105,7 @@ class IeBackend final : public BrowserBackend, public std::enable_shared_from_th
             }
         } else if (id == DISPID_DOCUMENTCOMPLETE && args->cArgs == 2 && args->rgvarg[1].vt == VT_DISPATCH && IsTop(args->rgvarg[1].pdispVal)) {
             const auto address = Source();
+            if(!events_.adapter_script.empty()&&!failed_navigation_)Execute(events_.adapter_script);
             if (address != L"about:blank" && !failed_navigation_ && events_.completed)
                 events_.completed(true, L"");
         } else if (id == DISPID_NAVIGATEERROR && args->cArgs == 5 && args->rgvarg[4].vt == VT_DISPATCH && IsTop(args->rgvarg[4].pdispVal)) {
@@ -106,7 +128,7 @@ class IeBackend final : public BrowserBackend, public std::enable_shared_from_th
             if (args->cArgs > index && args->rgvarg[index].vt == (VT_BYREF | VT_BOOL)) *args->rgvarg[index].pboolVal = VARIANT_TRUE;
             if (events_.local_document.empty() && id == DISPID_NEWWINDOW3 && args->cArgs == 5) {
                 const auto address = VariantText(args->rgvarg[0]);
-                if (!HttpOrigin(address).empty()) Navigate(address);
+                if (!HttpOrigin(address).empty()&&(!events_.intercept_download||!events_.intercept_download(Source(),address))) Navigate(address);
             }
         } else if (id == DISPID_FILEDOWNLOAD && args->cArgs >= 1 && args->rgvarg[0].vt == (VT_BYREF | VT_BOOL)) {
             // MSHTML reports loading an embedded HTML resource as an active
@@ -159,6 +181,7 @@ public:
     void Refresh() override { if (browser_) browser_->Refresh(); }
     void Stop() override { if (browser_) browser_->Stop(); }
     HRESULT PostJson(const std::wstring& json) override {
+        if(!closed_&&!events_.adapter_script.empty())return Execute(L"(function(r){if(window.__ttpSayobotResult)window.__ttpSayobotResult(r.message);})("+json+L");");
         if (closed_ || events_.local_document.empty() || Source() != events_.local_document) return E_ACCESSDENIED;
         ComPtr<IDispatch> document, script; ComPtr<IHTMLDocument2> html;
         HRESULT hr = browser_->get_Document(&document);

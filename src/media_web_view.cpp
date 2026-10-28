@@ -2,6 +2,7 @@
 #include "media_view.h"
 #include "webview_backend.h"
 #include "downloads.h"
+#include "download_page.h"
 #include <WebView2.h>
 #include <wrl.h>
 #include <wincrypt.h>
@@ -132,6 +133,8 @@ struct MediaSurface::State : std::enable_shared_from_this<State> {
         uint64_t id{};try{
             Require(message.size()<=65536,L"请求过大");const auto j=ttplayer::core::JsonReader(Utf8(message),65536).Read();id=j["id"].Integer();Require(id>0&&id<=9007199254740991ULL,L"请求标识无效");const auto op=j["op"].String();
             if(op=="profiles"){Reply(id,ProfilesJson(library));return;}
+            if(op=="downloadPage"){const auto page=GetDownloadPage(host);Reply(id,page.name.empty()?"null":"{\"name\":"+Quote(page.name)+"}");return;}
+            if(op=="openDownloadPage"){Require(IsWindowVisible(window)&&!GetDownloadPage(host).name.empty(),L"曲包下载组件不可用");Reply(id,"true");OpenDownloadPage(window);return;}
             if(op=="selectSource"){Require(IsWindowVisible(window),L"音乐窗当前不可用");library.SelectProfile(Field(j,"profileId",80));CancelJobs();Reply(id,"true");Event("profilesChanged");return;}
             if(op=="navigation"){can_back=j["canBack"].True();InvalidateRect(GetParent(window),nullptr,FALSE);Reply(id,"null");return;}
             if(op=="settings"){Require(IsWindowVisible(window),L"音乐窗当前不可用");Require(host.open_media_settings!=nullptr,L"请更新主程序，在选项 → 网络连接 → 音乐窗中设置媒体来源");const auto hr=host.open_media_settings(host.context);if(FAILED(hr))throw Error{hr,L"无法打开选项"};Reply(id,"true");return;}

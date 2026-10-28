@@ -1,4 +1,5 @@
 #include "media_view.h"
+#include "download_page.h"
 #include "downloads.h"
 #include <commctrl.h>
 #include <windowsx.h>
@@ -129,7 +130,9 @@ struct MediaView::Impl {
     void Command(int id,int notification) {
         if(id==Settings){auto menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,6000,L"设置");const auto sources=library.Profiles();const auto active=library.ActiveProfile();if(!sources.empty())AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
             for(size_t n=0;n<sources.size();++n){std::wstring title;for(auto c:sources[n].name){title+=c;if(c==L'&')title+=c;}AppendMenuW(menu,MF_STRING|(n==active?MF_CHECKED:0),6100+n,title.c_str());}
+            const auto page=GetDownloadPage(host);if(!page.name.empty()){AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,6001,page.name.c_str());}
             RECT r{};GetWindowRect(controls[Settings],&r);auto choice=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTALIGN|TPM_BOTTOMALIGN|TPM_RIGHTBUTTON,r.right,r.top,0,window,nullptr);DestroyMenu(menu);if(choice)Command(choice,0);return;}
+        if(id==6001){if(!GetDownloadPage(host).name.empty())OpenDownloadPage(window);return;}
         if(id==6000){if(host.open_media_settings)host.open_media_settings(host.context);else StatusText(L"请更新主程序，并在选项 → 网络连接 → 音乐窗中设置媒体来源");return;}
         if(id>=6100&&id<6164){const auto sources=library.Profiles();if(static_cast<size_t>(id-6100)<sources.size()){library.SelectProfile(sources[id-6100].id);profiles=library.Profiles();selected=library.ActiveProfile();Categories();RootQuery();Browse();}return;}
         if(profiles.empty())return;
