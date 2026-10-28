@@ -200,9 +200,10 @@ HRESULT BrowserWindow::Configure(const ttp_browser_config& config) {
     const auto origin = HttpOrigin(home); if (origin.empty()) return E_INVALIDARG;
     const bool changed = !home_url_.empty() && home_url_ != home;
     if (config.engine > 2) return E_INVALIDARG;
-    const bool changed_engine = engine_ != config.engine;
+    const bool changed_engine = engine_ != config.engine || disable_gpu_ != (config.disable_gpu != FALSE);
     engine_ = config.engine;
-    media_view_->Configure(engine_);
+    disable_gpu_ = config.disable_gpu != FALSE;
+    media_view_->Configure(engine_,disable_gpu_);
     bridge_->accept_recommendations = config.accept_recommendations != FALSE;
     state_file_ = config.state_file ? config.state_file : L"";
     home_url_ = home; origin_ = origin; topmost_ = config.topmost != FALSE; opacity_ = config.opacity;
@@ -450,9 +451,9 @@ HRESULT BrowserWindow::StartBrowser(bool force_ie) {
     if (backend_) { backend_->Shutdown(); backend_.reset(); }
     browser_ready_ = false; modern_attempt_ = false;
     if (!external_) { HRESULT hr = CreateBrowserDispatch(bridge_, true, &external_); if (FAILED(hr)) return hr; }
-    force_ie = force_ie || engine_ == 1;
-    if (!force_ie) { backend_ = MakeWebViewBackend(); modern_attempt_ = backend_ != nullptr; }
-    if (!backend_ && engine_ == 2) { Error(L"未检测到可用的 WebView2 Runtime。"); return HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND); }
+    force_ie = !download_page_view_ && (force_ie || engine_ == 1);
+    if (!force_ie) { backend_ = MakeWebViewBackend(disable_gpu_); modern_attempt_ = backend_ != nullptr; }
+    if (!backend_ && (engine_ == 2 || download_page_view_)) { Error(L"未检测到可用的 WebView2 Runtime。"); return HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND); }
     if (!backend_) backend_ = MakeIeBackend();
     BrowserEvents events;
     events.ready = [this](const wchar_t* name) { browser_ready_ = true; backend_name_ = name; };
@@ -471,7 +472,7 @@ HRESULT BrowserWindow::StartBrowser(bool force_ie) {
     };
     const HRESULT hr = backend_->Start(window_, ContentRect(), download_page_view_?nullptr:external_.Get(), profile_, std::move(events));
     if (FAILED(hr)) {
-        const bool retry_ie = modern_attempt_ && !force_ie && engine_ == 0; backend_->Shutdown(); backend_.reset();
+        const bool retry_ie = modern_attempt_ && !force_ie && engine_ == 0 && !download_page_view_; backend_->Shutdown(); backend_.reset();
         if (retry_ie) return StartBrowser(true);
         Error(L"无法创建网页浏览器。请检查系统浏览器组件或 WebView2 Runtime。"); return hr;
     }
@@ -489,7 +490,7 @@ void BrowserWindow::NavigationStarting(const std::wstring& target) {
 void BrowserWindow::NavigationCompleted(bool success, const std::wstring& error) {
     KillTimer(window_, kNavigationTimer); loading_ = false;
     if (!success) {
-        if (modern_attempt_ && !browser_ready_ && engine_ == 0) { PostMessageW(window_, kFallback, 0, 0); return; }
+        if (modern_attempt_ && !browser_ready_ && engine_ == 0 && !download_page_view_) { PostMessageW(window_, kFallback, 0, 0); return; }
         Error(error.empty() ? L"音乐网页加载失败。" : error); return;
     }
     error_visible_ = false; status_.clear();
@@ -968,13 +969,13 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     case WM_COMMAND: if (LOWORD(wp) == kRetry) { self->Retry(); return 0; } break;
     case WM_TIMER: if(wp==kLinkTimer){self->TickLink();return 0;} if (wp == kNavigationTimer) {
         KillTimer(hwnd,kNavigationTimer);
-        if (self->modern_attempt_ && !self->browser_ready_ && self->engine_ == 0) PostMessageW(hwnd,kFallback,0,0);
+        if (self->modern_attempt_ && !self->browser_ready_ && self->engine_ == 0 && !self->download_page_view_) PostMessageW(hwnd,kFallback,0,0);
         else { if (self->backend_) self->backend_->Stop(); self->Error(L"网页在 30 秒内没有完成加载，请检查连接后重试。"); }
         return 0;
     } break;
     case kActions: self->ProcessActions(); return 0;
     case kOpenDownloadPage: self->DownloadPageView(); return 0;
-    case kFallback: if (!self->destroying_ && !self->personal_view_ && !self->browser_ready_) self->StartBrowser(true); return 0;
+    case kFallback: if (!self->destroying_ && !self->personal_view_ && !self->download_page_view_ && !self->browser_ready_) self->StartBrowser(true); return 0;
     case WM_DESTROY:
         self->destroying_ = true; self->bridge_->alive = false; self->actions_.clear();
         KillTimer(hwnd,kNavigationTimer);KillTimer(hwnd,kLinkTimer); if (self->backend_) self->backend_->Shutdown();

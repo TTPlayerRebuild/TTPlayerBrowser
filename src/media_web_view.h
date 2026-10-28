@@ -20,7 +20,7 @@ public:
     bool CanBack() const;
     bool IsWebView() const;
     bool Translate(MSG*);
-    void Configure(uint32_t engine);
+    void Configure(uint32_t engine, bool disable_gpu);
 private:
     struct State;
     std::shared_ptr<State> state_;

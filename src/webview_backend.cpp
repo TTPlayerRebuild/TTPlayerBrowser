@@ -1,6 +1,7 @@
 #include "webview_backend.h"
 #include "browser_bridge.h"
 #include <WebView2.h>
+#include <WebView2EnvironmentOptions.h>
 #include <wrl.h>
 #include <algorithm>
 
@@ -28,6 +29,7 @@ class WebViewBackend final : public BrowserBackend, public std::enable_shared_fr
     HWND parent_{};
     RECT bounds_{};
     bool closed_{}, visible_{true}, navigating_{};
+    bool disable_gpu_{};
     UINT64 navigation_id_{};
     BrowserEvents events_;
     std::wstring pending_url_;
@@ -160,6 +162,7 @@ class WebViewBackend final : public BrowserBackend, public std::enable_shared_fr
         if (FAILED(hr)) Failure(hr);
     }
 public:
+    explicit WebViewBackend(bool disable_gpu):disable_gpu_(disable_gpu){}
     ~WebViewBackend() override { Shutdown(); }
     HRESULT Start(HWND parent, const RECT& bounds, IDispatch* external, const std::wstring& profile, BrowserEvents events) override {
         parent_ = parent; bounds_ = bounds; external_ = external; events_ = std::move(events);
@@ -168,7 +171,7 @@ public:
         HMODULE pinned{}; GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCWSTR>(&MakeWebViewBackend), &pinned);
         auto self = shared_from_this();
-        return CreateCoreWebView2EnvironmentWithOptions(nullptr, profile.c_str(), nullptr,
+        return CreateWebViewEnvironment(profile, disable_gpu_,
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                 [self](HRESULT error, ICoreWebView2Environment* environment) -> HRESULT {
                     if (self->closed_) return S_OK;
@@ -234,15 +237,32 @@ bool WebView2PlatformSupported() {
     const auto mask=VerSetConditionMask(VerSetConditionMask(0,VER_MAJORVERSION,VER_GREATER_EQUAL),VER_MINORVERSION,VER_GREATER_EQUAL);
     return VerifyVersionInfoW(&minimum,VER_MAJORVERSION|VER_MINORVERSION,mask)!=FALSE;
 }
-std::shared_ptr<BrowserBackend> MakeWebViewBackend() {
+bool WebView2RuntimeAvailable() {
     // Unsupported systems use IE/native without invoking the optional SDK.
-    if(!WebView2PlatformSupported())return {};
+    if(!WebView2PlatformSupported())return false;
     // The SDK loader is linked into this module; the browser Runtime remains
     // optional. Detection failure keeps the existing automatic IE fallback.
     LPWSTR installed{};
     const HRESULT hr = GetAvailableCoreWebView2BrowserVersionString(nullptr, &installed);
     CoTaskMemFree(installed);
-    if (FAILED(hr)) return {};
-    return std::make_shared<WebViewBackend>();
+    return SUCCEEDED(hr);
+}
+HRESULT CreateWebViewEnvironment(const std::wstring& profile, bool disable_gpu,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* completed) {
+    ComPtr<ICoreWebView2EnvironmentOptions> options;
+    if(disable_gpu) {
+        options=Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+        if(!options)return E_OUTOFMEMORY;
+        options->put_AdditionalBrowserArguments(L"--disable-gpu");
+        options->put_TargetCompatibleBrowserVersion(L"109.0.1518.0");
+    }
+    // Separate profiles let a live toggle start with different GPU arguments
+    // while the previous Runtime process is still shutting down.
+    const auto data=profile+(disable_gpu?L".Software":L"");
+    return CreateCoreWebView2EnvironmentWithOptions(nullptr,data.c_str(),options.Get(),completed);
+}
+std::shared_ptr<BrowserBackend> MakeWebViewBackend(bool disable_gpu) {
+    if (!WebView2RuntimeAvailable()) return {};
+    return std::make_shared<WebViewBackend>(disable_gpu);
 }
 }

@@ -25,7 +25,10 @@ struct Module {
         download_directory=source.download_directory ? source.download_directory : L"";
         home=source.home_url && *source.home_url ? source.home_url : L"http://mini.qianqian.com/index.html";
         cache_directory=source.cache_directory ? source.cache_directory : L"";
-        config=source;
+        config={};
+        std::memcpy(&config,&source,TTP_BROWSER_CONFIG_V1_SIZE);
+        if(source.size>=offsetof(ttp_browser_config,disable_gpu)+sizeof(source.disable_gpu))config.disable_gpu=source.disable_gpu;
+        config.size=sizeof(config);
         config.runtime_directory=runtime.c_str();
         config.state_file=state_file.c_str();
         config.download_directory=download_directory.c_str();
@@ -34,7 +37,7 @@ struct Module {
     }
 };
 bool ConfigValid(const ttp_browser_config* c) {
-    return c && c->size>=sizeof(*c) && c->state_file && *c->state_file &&
+    return c && c->size>=TTP_BROWSER_CONFIG_V1_SIZE && c->state_file && *c->state_file &&
         c->initial_state.size>=sizeof(ttp_browser_state) && c->engine<=2 &&
         (!c->home_url || !*c->home_url || !ttpbrowser::HttpOrigin(c->home_url).empty());
 }

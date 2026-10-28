@@ -28,9 +28,17 @@ http://c.taihe.com/res/download_pcclient/index.html。
 安装只需部署 ttpbrowser.dll；Loader 与 Runtime 是不同组件，合并 Loader 不等于安装 Runtime。
 
 历史音乐网页的默认策略是 WebView2 优先，Runtime 不可用或初始化失败时使用 IE/MSHTML。个人媒体库使用内置网页；Runtime 缺失或初始化失败后尝试 IE 专用的 ES5 页面，IE 控件或脚本不可用才回退原生列表。指定 IE 时从 IE 开始。
-Windows XP 没有 WebView2 支持，保留 IE 控件路线。Windows 7/8/8.1 的 WebView2
-停留在 109，不应把现代 Evergreen 当成这些系统的可维护方案。本次已对主程序与
-DLL执行 XP/Win7 静态导入审计；当前主机上的 IE 测试不等同于旧系统 VM 实测。
+Windows XP 没有 WebView2 支持，个人媒体库保留 IE → 原生列表路线，Sayobot 不开放。
+Win7 IE11 实测无法运行 Sayobot；使用 WebView2 109.0.1518.140 并关闭 GPU 加速后，
+页面试听、详情播放接入和三种曲包下载均通过虚拟机测试。未检测到 WebView2 Runtime
+时，Sayobot 在边框菜单和齿轮菜单中均隐藏；它不会回退 IE。
+个人媒体库仍按 WebView2 → IE → 原生列表回退。
+完整范围、环境和证据见 [旧系统音乐窗验证](LEGACY_MUSIC_WINDOW_VALIDATION_20261028.md)。
+
+「选项 → 网络连接 → 音乐窗」顶部新增「关闭 GPU 加速」。它同时控制个人媒体库
+和 Sayobot 的 WebView2 页面，改变后重新创建网页视图，下载队列继续运行。
+Win7 缺省勾选，其他系统缺省不勾选；已有明确保存的选择优先。此设置不改变
+系统 IE 或其他程序的 GPU 设置。
 
 重建配置 Player 节新增属性：
 
@@ -38,6 +46,7 @@ DLL执行 XP/Win7 静态导入审计；当前主机上的 IE 测试不等同于�
 BrowserEngine="0"    自动：WebView2 -> IE（默认）
 BrowserEngine="1"    强制 IE/MSHTML
 BrowserEngine="2"    必须 WebView2；缺 Runtime 时在窗内显示错误和重试
+BrowserDisableGpu="1"  关闭音乐窗 WebView2 GPU 加速；Win7 缺省为 1，其他系统为 0
 BrowserHomeURL="http://mini.qianqian.com/index.html"
 BrowserAutoStartup="0"  默认不强制启动显示；可以通过音乐窗底部复选框修改
 BrowserVisible="..."、BrowserWnd="..."、BrowserWnd2="..." 保存窗口状态。

@@ -59,6 +59,7 @@ private:
     bool popup_menu_active_{};
     BYTE opacity_{255};
     uint32_t engine_{};
+    bool disable_gpu_{};
     int hover_{-1}, pressed_{-1};
     int drag_hit_{HTNOWHERE};
     POINT drag_anchor_{};

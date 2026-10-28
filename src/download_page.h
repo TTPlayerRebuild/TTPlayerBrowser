@@ -1,12 +1,15 @@
 #pragma once
 #include "ttpbrowser.h"
+#include "webview_backend.h"
 #include <string>
 namespace ttpbrowser {
 constexpr UINT kOpenDownloadPage=WM_APP+0x323;
 struct DownloadPage {std::wstring name,url;};
 inline DownloadPage GetDownloadPage(const ttp_browser_host& host) {
     DownloadPage page;
-    if(!host.get_download_page||!host.recognize_page_download)return page;
+    // Sayobot's live application is unusable in XP/IE and Win7/IE11.
+    // All menus and restored page selections share this capability check.
+    if(!host.get_download_page||!host.recognize_page_download||!WebView2RuntimeAvailable())return page;
     BSTR name{},url{};const auto hr=host.get_download_page(host.context,&name,&url);
     if(hr==S_OK&&name&&url){page.name.assign(name,SysStringLen(name));page.url.assign(url,SysStringLen(url));}
     SysFreeString(name);SysFreeString(url);return page;

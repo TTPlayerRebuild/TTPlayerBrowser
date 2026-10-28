@@ -123,7 +123,10 @@ struct ttp_browser_config {
     // 0 = WebView2 when available, then IE; 1 = IE; 2 = require WebView2.
     uint32_t engine;
     BOOL accept_recommendations;
+    // Optional size-gated extension; older hosts retain GPU acceleration.
+    BOOL disable_gpu;
 };
+#define TTP_BROWSER_CONFIG_V1_SIZE offsetof(struct ttp_browser_config, disable_gpu)
 struct ttp_browser_api {
     uint32_t size;
     uint32_t version;

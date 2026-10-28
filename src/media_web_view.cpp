@@ -6,6 +6,7 @@
 #include <WebView2.h>
 #include <wrl.h>
 #include <wincrypt.h>
+#include <gdiplus.h>
 #include <atomic>
 #include <future>
 #include <chrono>
@@ -66,10 +67,41 @@ public:
 std::wstring IePageUrl(){wchar_t path[32768]{};GetModuleFileNameW(Module(),path,32768);return std::wstring(L"res://")+path+L"/302";}
 ComPtr<IStream> Bytes(const void* data,ULONG size){ComPtr<IStream> stream;if(FAILED(CreateStreamOnHGlobal(nullptr,TRUE,&stream)))return {};ULONG written{};LARGE_INTEGER zero{};
     if(FAILED(stream->Write(data,size,&written))||written!=size||FAILED(stream->Seek(zero,STREAM_SEEK_SET,nullptr)))return {};return stream;}
+std::string IeCover(const std::string& bytes){
+    // IE8 limits the whole data URI to 32 KiB. Base64 adds roughly one third.
+    // Keep ordinary small images unchanged; larger artwork needs a thumbnail.
+    if(bytes.size()<=24000)return bytes;
+    struct GraphicsSession {
+        ULONG_PTR token{};
+        GraphicsSession(){Gdiplus::GdiplusStartupInput input;Gdiplus::GdiplusStartup(&token,&input,nullptr);}
+        ~GraphicsSession(){if(token)Gdiplus::GdiplusShutdown(token);}
+    } graphics;
+    if(!graphics.token)return {};
+    auto input=Bytes(bytes.data(),static_cast<ULONG>(bytes.size()));if(!input)return {};
+    Gdiplus::Bitmap original(input.Get());const auto width=original.GetWidth(),height=original.GetHeight();
+    if(original.GetLastStatus()!=Gdiplus::Ok||!width||!height)return {};
+    Gdiplus::Bitmap thumbnail(96,96,PixelFormat24bppRGB);
+    {
+        Gdiplus::Graphics canvas(&thumbnail);canvas.Clear(Gdiplus::Color(255,234,243,248));
+        canvas.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        const double scale=96.0/std::max(width,height);
+        const int w=std::max(1,static_cast<int>(width*scale)),h=std::max(1,static_cast<int>(height*scale));
+        if(canvas.DrawImage(&original,(96-w)/2,(96-h)/2,w,h)!=Gdiplus::Ok)return {};
+    }
+    auto output=Bytes(nullptr,0);if(!output)return {};
+    const CLSID jpeg={0x557cf401,0x1a04,0x11d3,{0x9a,0x73,0x00,0x00,0xf8,0x1e,0xf3,0x2e}};
+    ULONG quality=80;Gdiplus::EncoderParameters parameters{};parameters.Count=1;
+    parameters.Parameter[0]={Gdiplus::EncoderQuality,1,Gdiplus::EncoderParameterValueTypeLong,&quality};
+    if(thumbnail.Save(output.Get(),&jpeg,&parameters)!=Gdiplus::Ok)return {};
+    STATSTG stat{};if(FAILED(output->Stat(&stat,STATFLAG_NONAME))||!stat.cbSize.QuadPart||stat.cbSize.QuadPart>24000)return {};
+    std::string result(static_cast<size_t>(stat.cbSize.QuadPart),'\0');LARGE_INTEGER zero{};ULONG read{};
+    if(FAILED(output->Seek(zero,STREAM_SEEK_SET,nullptr))||FAILED(output->Read(result.data(),static_cast<ULONG>(result.size()),&read))||read!=result.size())return {};
+    return result;
+}
 }
 struct MediaSurface::State : std::enable_shared_from_this<State> {
     Library& library;ttp_browser_host host;Downloads& downloads;std::wstring profile;
-    HWND window{};uint32_t engine{};bool closed{},ready{},can_back{},failed{},fallback_pending{},ie_attempt{};DWORD started{};UINT64 navigation_id{};
+    HWND window{};uint32_t engine{};bool disable_gpu{},closed{},ready{},can_back{},failed{},fallback_pending{},ie_attempt{};DWORD started{};UINT64 navigation_id{};
     std::unique_ptr<MediaView> native;std::shared_ptr<BrowserBackend> ie;std::wstring ie_url;
     ComPtr<ICoreWebView2Environment> environment;ComPtr<ICoreWebView2Controller> controller;ComPtr<ICoreWebView2> web;
     struct Result {uint64_t id{},epoch{};std::string op,json;std::wstring error;Page page;Profile profile;};
@@ -148,9 +180,10 @@ struct MediaSurface::State : std::enable_shared_from_this<State> {
                 Run(id,op,[l,p,item](Result& r,const Cancel& c){r.page.items=l->Playable(p,item,c);r.profile=p;});return;
             }
             if(op=="cover"||op=="details"){
-                const auto item=GetItem(j);const auto p=current_profile;auto* l=&library;
-                Run(id,op,[l,p,item,op](Result& r,const Cancel& c){std::string cover;std::wstring lyrics;
+                const auto item=GetItem(j);const auto p=current_profile;auto* l=&library;const bool legacy=ie!=nullptr;
+                Run(id,op,[l,p,item,op,legacy](Result& r,const Cancel& c){std::string cover;std::wstring lyrics;
                     if(!item.cover.empty())try{cover=l->Cover(p,item.cover,c);}catch(const Error&){}
+                    if(legacy)cover=IeCover(cover);
                     if(op=="details"&&item.kind==Kind::Song)try{lyrics=l->Lyrics(p,item,c);}catch(const Error&){}
                     r.json="{\"image\":"+ImageJson(cover)+",\"lyrics\":"+Quote(lyrics)+"}";
                 });return;
@@ -194,7 +227,7 @@ struct MediaSurface::State : std::enable_shared_from_this<State> {
         LPWSTR version{};auto hr=GetAvailableCoreWebView2BrowserVersionString(nullptr,&version);CoTaskMemFree(version);if(FAILED(hr)){UseIe();return;}
         // Runtime completion handlers may run after the owner closes.
         HMODULE pinned{};GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,reinterpret_cast<LPCWSTR>(&Module),&pinned);
-        auto self=shared_from_this();hr=CreateCoreWebView2EnvironmentWithOptions(nullptr,profile.c_str(),nullptr,Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([self](HRESULT error,ICoreWebView2Environment* env)->HRESULT{
+        auto self=shared_from_this();hr=CreateWebViewEnvironment(profile,disable_gpu,Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([self](HRESULT error,ICoreWebView2Environment* env)->HRESULT{
             if(self->closed||self->failed)return S_OK;if(FAILED(error)||!env){self->Fallback();return S_OK;}self->environment=env;
             auto result=env->CreateCoreWebView2Controller(self->window,Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>([self](HRESULT code,ICoreWebView2Controller* controller)->HRESULT{
                 if(self->closed||self->failed){if(controller)controller->Close();return S_OK;}if(FAILED(code)||!controller)self->Fallback();else self->Initialize(controller);return S_OK;}).Get());if(FAILED(result))self->Fallback();return S_OK;}).Get());if(FAILED(hr))Fallback();
@@ -225,6 +258,6 @@ void MediaSurface::ReloadProfiles(){if(state_->native)state_->native->ReloadProf
 bool MediaSurface::IsIe() const{return state_->ready&&state_->ie!=nullptr;}
 bool MediaSurface::IsWebView() const{return state_->ready&&state_->web&&!state_->closed;}
 bool MediaSurface::Translate(MSG* m){return state_->native?state_->native->Translate(m):state_->ie?state_->ie->Translate(m):false;}
-void MediaSurface::Configure(uint32_t engine){if(state_->engine==engine)return;auto& s=state_;s->engine=engine;if(s->window){auto parent=GetParent(s->window);RECT r{};GetWindowRect(s->window,&r);MapWindowPoints(nullptr,parent,reinterpret_cast<POINT*>(&r),2);bool visible=IsWindowVisible(s->window)!=FALSE;
-    auto next=std::make_shared<State>(s->library,s->host,s->downloads,L"",engine);next->profile=s->profile;s->Close();DestroyWindow(s->window);for(auto& j:s->jobs)if(j.future.valid())j.future.wait();state_=next;Create(parent);Resize(r);ShowWindow(state_->window,visible?SW_SHOW:SW_HIDE);}}
+void MediaSurface::Configure(uint32_t engine,bool disable_gpu){if(state_->engine==engine&&state_->disable_gpu==disable_gpu)return;auto& s=state_;s->engine=engine;s->disable_gpu=disable_gpu;if(s->window){auto parent=GetParent(s->window);RECT r{};GetWindowRect(s->window,&r);MapWindowPoints(nullptr,parent,reinterpret_cast<POINT*>(&r),2);bool visible=IsWindowVisible(s->window)!=FALSE;
+    auto next=std::make_shared<State>(s->library,s->host,s->downloads,L"",engine);next->profile=s->profile;next->disable_gpu=disable_gpu;s->Close();DestroyWindow(s->window);for(auto& j:s->jobs)if(j.future.valid())j.future.wait();state_=next;Create(parent);Resize(r);ShowWindow(state_->window,visible?SW_SHOW:SW_HIDE);}}
 }

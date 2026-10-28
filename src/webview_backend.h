@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+struct ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler;
 
 namespace ttpbrowser {
 struct BrowserEvents {
@@ -39,6 +40,9 @@ public:
 // The loader is statically linked. Creation requires an available Runtime;
 // asynchronous failure is reported through completed(false, ...).
 bool WebView2PlatformSupported();
-std::shared_ptr<BrowserBackend> MakeWebViewBackend();
+bool WebView2RuntimeAvailable();
+HRESULT CreateWebViewEnvironment(const std::wstring& profile, bool disable_gpu,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* completed);
+std::shared_ptr<BrowserBackend> MakeWebViewBackend(bool disable_gpu=false);
 std::shared_ptr<BrowserBackend> MakeIeBackend();
 }
