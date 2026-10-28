@@ -10,13 +10,16 @@
 
 namespace ttpbrowser {
 class Downloads;
+class MediaSurface;
+namespace media {class Library;}
 class BrowserWindow final {
 public:
-    BrowserWindow(const ttp_browser_host&, const ttp_browser_config&, Downloads&);
+    BrowserWindow(const ttp_browser_host&, const ttp_browser_config&, Downloads&, media::Library&);
     ~BrowserWindow();
     HRESULT Configure(const ttp_browser_config&);
     HRESULT SetSkin(const ttp_browser_skin&);
     HRESULT Show(uint32_t);
+    void MediaSettingsChanged();
     HWND Window() const { return window_; }
     BOOL Translate(MSG*);
     HRESULT GetState(ttp_browser_state*) const;
@@ -31,6 +34,9 @@ private:
     };
     ttp_browser_host host_{};
     Downloads& downloads_;
+    std::unique_ptr<MediaSurface> media_view_;
+    bool personal_view_{};
+    void PersonalView(bool);
     HWND window_{}, tooltip_{}, error_panel_{}, error_text_{}, retry_button_{};
     HINSTANCE instance_{};
     std::wstring state_file_, home_url_, origin_, profile_, current_url_, backend_name_, status_;

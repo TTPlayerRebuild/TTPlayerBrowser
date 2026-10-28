@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-22",
+  "date": "2026-10-27",
   "files": [
     {
       "path": "src/audio/legacy_cache.cpp",
@@ -55,6 +55,11 @@
       "path": "src/app/ttplayer.manifest",
       "source": "rebuild/src/app/ttplayer.manifest",
       "sha256": "6c7b2bd5b3773981c73c8548a9984524b5c8e3dfcd3ee18448c1f88df03cbe8e"
+    },
+    {
+      "path": "include/ttplayer/core/json.h",
+      "source": "rebuild/include/ttplayer/core/json.h",
+      "sha256": "a7d67e8b5143b762238fc49a0c114668448a48210b818afba2a6fae823af1d2f"
     }
   ]
 }

@@ -115,10 +115,22 @@ HRESULT Downloads::Configure(const ttp_browser_config& config){return impl_->Con
 HRESULT Downloads::Enqueue(const ttp_browser_track& track,uint64_t* task_id) {
     if(task_id)*task_id=0;
     try {
-        const auto url=ttplayer::audio::HttpDownloadKey(Copy(track.source));if(url.empty())return E_INVALIDARG;
+        auto source=Copy(track.source);
+        if(source.starts_with(L"https://ttpbrowser.invalid/v1/")) {
+            const auto action=source.find(L"/play/",31);
+            if(action!=source.npos)source.replace(action,6,L"/download/");
+        }
+        const auto url=ttplayer::audio::HttpDownloadKey(std::move(source));if(url.empty())return E_INVALIDARG;
         if(impl_->folder.empty())return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
         const auto storage=impl_->queue->StorageResult();if(FAILED(storage))return storage;
-        auto destination=ttplayer::audio::HttpDownloadDestination(impl_->folder,url,Copy(track.title),Copy(track.artist),impl_->artist_folders);
+        auto filename_title=Copy(track.title);
+        if(url.starts_with(L"https://ttpbrowser.invalid/v1/")) {
+            const auto extension=std::filesystem::path(url.substr(url.find_last_of(L'/')+1)).extension().wstring();
+            if(!extension.empty() && filename_title.size()>extension.size() &&
+                !_wcsicmp(filename_title.c_str()+filename_title.size()-extension.size(),extension.c_str()))
+                filename_title.resize(filename_title.size()-extension.size());
+        }
+        auto destination=ttplayer::audio::HttpDownloadDestination(impl_->folder,url,std::move(filename_title),Copy(track.artist),impl_->artist_folders);
         const auto id=impl_->queue->Enqueue(url,Copy(track.title),std::move(destination),impl_->replace,Copy(track.artist),Copy(track.tid));
         if(!id)return E_FAIL;
         if(task_id)*task_id=id;

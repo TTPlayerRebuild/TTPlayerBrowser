@@ -83,6 +83,10 @@ struct ttp_browser_host {
     // callers must not substitute a guessed same-name lyric file.
     HRESULT (WINAPI* resolve_associated_lyric)(void*, const wchar_t* media_path,
                                               BSTR* lyric_path);
+    // Optional: host resolves stable personal-library sources before HTTP I/O.
+    uint32_t media_source_version;
+    // Optional UI-thread shortcut to Options / Network / Music / Media sources.
+    HRESULT (WINAPI* open_media_settings)(void*);
 };
 // Version 1 hosts predating the optional window-drag callback remain supported.
 #define TTP_BROWSER_HOST_V1_SIZE offsetof(struct ttp_browser_host, adjust_window_rect)
@@ -121,7 +125,15 @@ struct ttp_browser_api {
     // Retained objects reject calls after destroy. Release all returned COM
     // references before FreeLibrary; the caller owns the DLL load reference.
     HRESULT (WINAPI* external_dispatch)(void*, IDispatch**);
+    // Optional worker-thread API. Caller must keep the instance alive until
+    // the call returns. Credentials never enter the persistent source URL.
+    HRESULT (WINAPI* resolve_source)(void*, const wchar_t*,
+        BOOL (WINAPI* canceled)(void*), void* cancel_context, BSTR* resolved_url);
+    // Optional native child page, owned by the DLL and destroyed with parent.
+    HRESULT (WINAPI* create_settings_page)(void*, HWND parent, HWND* page);
+    HRESULT (WINAPI* commit_settings_page)(void*);
 };
+#define TTP_BROWSER_API_V1_SIZE offsetof(struct ttp_browser_api, resolve_source)
 typedef const struct ttp_browser_api* (WINAPI* ttp_browser_get_api_fn)(uint32_t);
 #ifdef __cplusplus
 extern "C" {

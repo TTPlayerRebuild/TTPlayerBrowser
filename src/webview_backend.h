@@ -13,6 +13,8 @@ struct BrowserEvents {
     std::function<void(bool, bool)> history;
     std::function<bool(const std::wstring&)> trusted;
     std::function<void(const std::wstring&)> download;
+    // An exact embedded res: URL. Nonempty opts into a closed local document.
+    std::wstring local_document;
 };
 class BrowserBackend {
 public:
@@ -28,9 +30,11 @@ public:
     virtual bool Translate(MSG*) = 0;
     virtual std::wstring Source() const = 0;
     virtual void Shutdown() = 0;
+    virtual HRESULT PostJson(const std::wstring&) { return E_NOTIMPL; }
 };
 // The loader is statically linked. Creation requires an available Runtime;
 // asynchronous failure is reported through completed(false, ...).
+bool WebView2PlatformSupported();
 std::shared_ptr<BrowserBackend> MakeWebViewBackend();
 std::shared_ptr<BrowserBackend> MakeIeBackend();
 }

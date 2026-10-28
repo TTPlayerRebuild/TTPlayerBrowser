@@ -2,9 +2,11 @@
 
 `ttpbrowser.dll` 是重建版播放器的可选 x86 组件，提供原生皮肤音乐窗、网页脚本桥和下载管理。
 
+支持 **Navidrome / OpenSubsonic** 与 **OpenList** 个人媒体库：在主程序选项的「网络连接 → 音乐窗 → 媒体来源」配置来源、浏览或搜索歌曲，并交给千千播放、加入列表或下载。`2026.10.28p3` 使用 DLL 内置的 WebView2 网页界面，提供封面播放、紧凑歌曲列表和底部分页/操作栏，右下角齿轮菜单提供设置入口和来源切换。选项页以名称/类型列表管理来源，支持添加、删除、编辑、排序和多个同类型服务。来源列表按歌词服务器编辑器使用原生对话框与缓冲绘制。个人媒体库请求优先使用 `AddIn/ttp_https.dll` ABI 8，组件缺失、旧版或明确要求系统代理处理时回退 WinINet。需要已接入合并设置页的 2026.10.28 主程序；配置及本机测试说明见 [个人媒体库](docs/PERSONAL_MEDIA.zh-CN.md)。
+
 关闭播放器，将 `ttpbrowser.dll` 放在 `TTPlayerRebuild.exe` 同一目录，重新启动即可。此组件不放入 `AddIn`。DLL 缺失或不兼容时，主程序隐藏音乐窗及下载相关入口。
 
-WebView2 Loader 已静态合并到组件，默认使用 WebView2，无法使用时回退 IE/MSHTML。浏览器 Runtime 仍需安装，安装要求见 [Microsoft 分发说明](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)。原 `mini.qianqian.com` 入口保留，远端搜索、榜单等服务不由本组件恢复。
+WebView2 Loader 已静态合并到组件。个人媒体库默认使用 WebView2，无法使用时按 IE → 原生列表回退；历史音乐网页继续保留 WebView2 / IE 策略。浏览器 Runtime 仍需安装，安装要求见 [Microsoft 分发说明](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)。原 `mini.qianqian.com` 入口保留，远端搜索、榜单等服务不由本组件恢复。
 
 ## 构建与发行
 
@@ -25,6 +27,7 @@ GitHub Actions 与其它插件保持相同用法：手动运行 **Build TTPlayer
 ## 文档
 
 - [实现、配置与脚本接口](docs/README.zh-CN.md)
+- [OpenSubsonic 与 OpenList 个人媒体库](docs/PERSONAL_MEDIA.zh-CN.md)
 - [独立构建、Actions 和依赖](docs/BUILD.md)
 - [本次构建与打包验证](docs/BUILD_VALIDATION.md)
 - [首次交付验证记录](docs/VALIDATION.zh-CN.md)

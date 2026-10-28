@@ -9,6 +9,7 @@
 #include <oleidl.h>
 #include <wrl/client.h>
 #include <atomic>
+#include <mshtml.h>
 
 namespace ttpbrowser {
 using Microsoft::WRL::ComPtr;
@@ -67,11 +68,12 @@ class IeBackend final : public BrowserBackend, public std::enable_shared_from_th
             const auto* sender = Unwrap(&args->rgvarg[6]);
             const bool top = sender && sender->vt == VT_DISPATCH && IsTop(sender->pdispVal);
             const bool web = !HttpOrigin(target).empty();
-            const bool trusted = web && events_.trusted && events_.trusted(target);
+            const bool local = !events_.local_document.empty();
+            const bool trusted = local ? top && target == events_.local_document : web && events_.trusted && events_.trusted(target);
             // IE shares its OLE external object with documents in the control.
             // Reject unrelated frame navigation so it cannot inherit the native
             // bridge. Same-origin page frames share the top document's authority.
-            if ((!web && target != L"about:blank") || (!top && target != L"about:blank" && !trusted)) {
+            if (local ? !trusted : ((!web && target != L"about:blank") || (!top && target != L"about:blank" && !trusted))) {
                 if (args->rgvarg[0].vt == (VT_BYREF | VT_BOOL)) *args->rgvarg[0].pboolVal = VARIANT_TRUE;
                 return S_OK;
             }
@@ -102,11 +104,16 @@ class IeBackend final : public BrowserBackend, public std::enable_shared_from_th
         } else if (id == DISPID_NEWWINDOW2 || id == DISPID_NEWWINDOW3) {
             const UINT index = id == DISPID_NEWWINDOW3 ? 3 : 0;
             if (args->cArgs > index && args->rgvarg[index].vt == (VT_BYREF | VT_BOOL)) *args->rgvarg[index].pboolVal = VARIANT_TRUE;
-            if (id == DISPID_NEWWINDOW3 && args->cArgs == 5) {
+            if (events_.local_document.empty() && id == DISPID_NEWWINDOW3 && args->cArgs == 5) {
                 const auto address = VariantText(args->rgvarg[0]);
                 if (!HttpOrigin(address).empty()) Navigate(address);
             }
         } else if (id == DISPID_FILEDOWNLOAD && args->cArgs >= 1 && args->rgvarg[0].vt == (VT_BYREF | VT_BOOL)) {
+            // MSHTML reports loading an embedded HTML resource as an active
+            // document download. Only that exact local document is allowed.
+            const auto* active = args->cArgs >= 2 ? Unwrap(&args->rgvarg[1]) : nullptr;
+            if (!events_.local_document.empty() && active && active->vt == VT_BOOL && active->boolVal != VARIANT_FALSE)
+                return S_OK;
             *args->rgvarg[0].pboolVal = VARIANT_TRUE;
             if (events_.completed) events_.completed(false, L"请使用页面的音乐下载按钮，下载任务由播放器管理。");
         }
@@ -136,7 +143,7 @@ public:
         return S_OK;
     }
     HRESULT Navigate(const std::wstring& address) override {
-        if (!browser_ || closed_ || HttpOrigin(address).empty()) return E_INVALIDARG;
+        if (!browser_ || closed_ || (events_.local_document.empty() ? HttpOrigin(address).empty() : address != events_.local_document)) return E_INVALIDARG;
         VARIANT url{}, headers{}, empty{}; url.vt = headers.vt = VT_BSTR;
         url.bstrVal = SysAllocString(address.c_str());
         const auto slash = address.rfind(L'/');
@@ -151,6 +158,19 @@ public:
     void Forward() override { if (browser_) browser_->GoForward(); }
     void Refresh() override { if (browser_) browser_->Refresh(); }
     void Stop() override { if (browser_) browser_->Stop(); }
+    HRESULT PostJson(const std::wstring& json) override {
+        if (closed_ || events_.local_document.empty() || Source() != events_.local_document) return E_ACCESSDENIED;
+        ComPtr<IDispatch> document, script; ComPtr<IHTMLDocument2> html;
+        HRESULT hr = browser_->get_Document(&document);
+        if (SUCCEEDED(hr) && document) hr = document.As(&html); else return E_FAIL;
+        if (SUCCEEDED(hr)) hr = html->get_Script(&script);
+        if (FAILED(hr) || !script) return E_FAIL;
+        LPOLESTR name = const_cast<LPOLESTR>(L"ttReceive"); DISPID id{};
+        hr = script->GetIDsOfNames(IID_NULL, &name, 1, LOCALE_USER_DEFAULT, &id);
+        if (FAILED(hr)) return hr;
+        ATL::CComVariant value(json.c_str()); DISPPARAMS args{&value, nullptr, 1, 0};
+        return script->Invoke(id, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &args, nullptr, nullptr, nullptr);
+    }
     bool Translate(MSG* message) override { ComPtr<IOleInPlaceActiveObject> active;
         return browser_ && message && SUCCEEDED(browser_.As(&active)) && active->TranslateAccelerator(message) == S_OK; }
     std::wstring Source() const override { BSTR value{}; if (browser_) browser_->get_LocationURL(&value);

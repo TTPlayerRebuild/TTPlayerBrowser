@@ -1,4 +1,7 @@
 #include "browser_window.h"
+#include "media_web_view.h"
+#include <filesystem>
+#include <fstream>
 #include "downloads.h"
 #include <commctrl.h>
 #include <windowsx.h>
@@ -137,17 +140,22 @@ HRGN SkinRegion(const ttp_browser_skin& skin, SIZE size, RECT content) {
     return region;
 }
 }
-BrowserWindow::BrowserWindow(const ttp_browser_host& host, const ttp_browser_config& config, Downloads& downloads)
+BrowserWindow::BrowserWindow(const ttp_browser_host& host, const ttp_browser_config& config, Downloads& downloads, media::Library& library)
     : host_(host), downloads_(downloads), bridge_(std::make_shared<BridgeContext>()) {
     HMODULE module{}; GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(&BrowserWindow::Proc), &module); instance_ = module;
+    media_view_=std::make_unique<MediaSurface>(library,host,downloads,config.state_file,config.engine);
+    const auto preference=std::filesystem::path(config.state_file).parent_path()/L"PersonalLibrary.enabled";
+    personal_view_=!config.home_url || std::wstring(config.home_url)==L"http://mini.qianqian.com/index.html";
+    {std::ifstream saved(preference);char choice{};if(saved.get(choice))personal_view_=choice!='0';}
+    personal_view_=personal_view_ && host_.media_source_version!=0;
     state_ = config.initial_state; state_.size = sizeof(state_);
     first_position_ = !ValidBounds(config.initial_state.bounds);
     if (!ValidBounds(state_.bounds)) state_.bounds = {140, 100, 700, 640};
     autostart_ = (state_.flags & TTP_BROWSER_STATE_AUTOSTART) != 0;
     downloads_view_ = (state_.flags & TTP_BROWSER_STATE_DOWNLOADS) != 0;
     bridge_->allowed = [this] {
-        return !destroying_ && window_ && IsWindowVisible(window_) && !downloads_view_ && browser_ready_ && backend_ &&
+        return !destroying_ && window_ && IsWindowVisible(window_) && !downloads_view_ && !personal_view_ && browser_ready_ && backend_ &&
             !error_visible_ && !origin_.empty() && HttpOrigin(backend_->Source()) == origin_;
     };
     bridge_->submit = [this](std::vector<BrowserTrack> tracks, int a, int b, int c, bool downloads_request, uint64_t generation) {
@@ -176,6 +184,7 @@ BrowserWindow::~BrowserWindow() {
     actions_.clear();
     if (backend_) backend_->Shutdown(); backend_.reset(); external_.Reset();
     if (window_) { KillTimer(window_, kNavigationTimer);KillTimer(window_,kLinkTimer); DestroyWindow(window_); }
+    media_view_.reset();
     FreeSkin();
     // Another instance may still own a window of this class; Windows refuses
     // that unregister until its final HWND is gone.
@@ -188,6 +197,7 @@ HRESULT BrowserWindow::Configure(const ttp_browser_config& config) {
     if (config.engine > 2) return E_INVALIDARG;
     const bool changed_engine = engine_ != config.engine;
     engine_ = config.engine;
+    media_view_->Configure(engine_);
     bridge_->accept_recommendations = config.accept_recommendations != FALSE;
     state_file_ = config.state_file ? config.state_file : L"";
     home_url_ = home; origin_ = origin; topmost_ = config.topmost != FALSE; opacity_ = config.opacity;
@@ -205,7 +215,7 @@ HRESULT BrowserWindow::Configure(const ttp_browser_config& config) {
         SetLayeredWindowAttributes(window_, skin_.valid ? skin_.transparent_color : RGB(255,0,255), opacity_, LWA_COLORKEY | LWA_ALPHA);
         if (changed_engine && backend_) {
             backend_->Shutdown(); backend_.reset(); browser_ready_ = false;
-            if (IsWindowVisible(window_) && !downloads_view_) StartBrowser();
+            if (IsWindowVisible(window_) && !downloads_view_ && !personal_view_) StartBrowser();
         } else if (changed && backend_) backend_->Navigate(home_url_);
     }
     return S_OK;
@@ -295,7 +305,7 @@ void BrowserWindow::UpdateWindowRegion() {
 }
 SIZE BrowserWindow::MinimumSize() const {
     return {skin_.valid ? std::max(320L,skin_.background_size.cx) : 320,
-            skin_.valid ? std::max(240L,skin_.background_size.cy) : 240};
+            skin_.valid ? std::max(personal_view_?440L:240L,skin_.background_size.cy) : personal_view_?440:240};
 }
 int BrowserWindow::BackgroundHit(POINT point) const {
     RECT client{}; GetClientRect(window_,&client);
@@ -388,8 +398,8 @@ RECT BrowserWindow::ControlRect(int id) const {
     }
 }
 bool BrowserWindow::Enabled(int id) const {
-    if (id == TTP_BROWSER_BACK) return !downloads_view_ && can_back_;
-    if (id == TTP_BROWSER_FORWARD) return !downloads_view_ && can_forward_;
+    if (id == TTP_BROWSER_BACK) return !downloads_view_ && (personal_view_ ? media_view_->CanBack() : can_back_);
+    if (id == TTP_BROWSER_FORWARD) return !downloads_view_ && !personal_view_ && can_forward_;
     if (id == TTP_BROWSER_REFRESH) return !downloads_view_;
     return true;
 }
@@ -419,6 +429,7 @@ void BrowserWindow::Layout() {
     if (!window_) return;
     const auto bounds = ContentRect(); if (backend_) backend_->Resize(bounds);
     if (downloads_.Window()) downloads_.Resize(bounds);
+    if (media_view_) media_view_->Resize(bounds);
     if (error_panel_) {
         MoveWindow(error_panel_, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top, TRUE);
         const int width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
@@ -453,7 +464,7 @@ HRESULT BrowserWindow::StartBrowser(bool force_ie) {
         if (retry_ie) return StartBrowser(true);
         Error(L"无法创建网页浏览器。请检查系统浏览器组件或 WebView2 Runtime。"); return hr;
     }
-    backend_->Visible(!downloads_view_); loading_ = true;
+    backend_->Visible(!downloads_view_ && !personal_view_); loading_ = true;
     SetTimer(window_, kNavigationTimer, 30000, nullptr);
     return backend_->Navigate(current_url_.empty() ? home_url_ : current_url_);
 }
@@ -461,7 +472,7 @@ void BrowserWindow::NavigationStarting(const std::wstring& target) {
     ++bridge_->document_generation;
     current_url_ = target; loading_ = true; error_visible_ = false; status_ = L"正在打开音乐窗…";
     ShowWindow(error_panel_, SW_HIDE); ShowWindow(error_text_, SW_HIDE); ShowWindow(retry_button_, SW_HIDE);
-    if (backend_) backend_->Visible(!downloads_view_);
+    if (backend_) backend_->Visible(!downloads_view_ && !personal_view_);
     SetTimer(window_, kNavigationTimer, 30000, nullptr); InvalidateRect(window_, nullptr, FALSE);
 }
 void BrowserWindow::NavigationCompleted(bool success, const std::wstring& error) {
@@ -472,7 +483,7 @@ void BrowserWindow::NavigationCompleted(bool success, const std::wstring& error)
     }
     error_visible_ = false; status_.clear();
     ShowWindow(error_panel_, SW_HIDE); ShowWindow(error_text_, SW_HIDE); ShowWindow(retry_button_, SW_HIDE);
-    if (backend_) backend_->Visible(!downloads_view_); InvalidateRect(window_, nullptr, FALSE);
+    if (backend_) backend_->Visible(!downloads_view_ && !personal_view_); InvalidateRect(window_, nullptr, FALSE);
 }
 void BrowserWindow::Error(const std::wstring& message) {
     if (!window_) return;
@@ -480,10 +491,10 @@ void BrowserWindow::Error(const std::wstring& message) {
     const std::wstring text = L"音乐窗暂时无法打开\r\n\r\n" + message + L"\r\n" + (current_url_.empty() ? home_url_ : current_url_);
     SetWindowTextW(error_text_, text.c_str());
     if (backend_) backend_->Visible(false);
-    ShowWindow(error_panel_, downloads_view_ ? SW_HIDE : SW_SHOW);
-    ShowWindow(error_text_, downloads_view_ ? SW_HIDE : SW_SHOW);
-    ShowWindow(retry_button_, downloads_view_ ? SW_HIDE : SW_SHOW);
-    if (!downloads_view_) { BringWindowToTop(error_panel_); BringWindowToTop(error_text_); BringWindowToTop(retry_button_); }
+    ShowWindow(error_panel_, (downloads_view_ || personal_view_) ? SW_HIDE : SW_SHOW);
+    ShowWindow(error_text_, (downloads_view_ || personal_view_) ? SW_HIDE : SW_SHOW);
+    ShowWindow(retry_button_, (downloads_view_ || personal_view_) ? SW_HIDE : SW_SHOW);
+    if (!downloads_view_ && !personal_view_) { BringWindowToTop(error_panel_); BringWindowToTop(error_text_); BringWindowToTop(retry_button_); }
     InvalidateRect(window_, nullptr, FALSE);
 }
 void BrowserWindow::Retry() {
@@ -493,6 +504,7 @@ void BrowserWindow::Retry() {
 }
 void BrowserWindow::SwitchView(bool downloads_view) {
     downloads_view_ = downloads_view;
+    if(media_view_->Window())ShowWindow(media_view_->Window(),SW_HIDE);
     if (downloads_view_) {
         if (!downloads_.Window()) downloads_.CreateView(window_);
         if (downloads_.Window()) { downloads_.Resize(ContentRect()); downloads_.Refresh(); ShowWindow(downloads_.Window(), SW_SHOW); }
@@ -500,11 +512,26 @@ void BrowserWindow::SwitchView(bool downloads_view) {
         ShowWindow(error_panel_, SW_HIDE); ShowWindow(error_text_, SW_HIDE); ShowWindow(retry_button_, SW_HIDE);
     } else {
         if (downloads_.Window()) ShowWindow(downloads_.Window(), SW_HIDE);
-        if (!backend_) StartBrowser();
+        if(personal_view_) {
+            RECT outer{};GetWindowRect(window_,&outer);const auto minimum=MinimumSize();
+            if(outer.right-outer.left<minimum.cx||outer.bottom-outer.top<minimum.cy)
+                SetWindowPos(window_,nullptr,0,0,std::max(outer.right-outer.left,minimum.cx),std::max(outer.bottom-outer.top,minimum.cy),SWP_NOMOVE|SWP_NOZORDER);
+            if(backend_)backend_->Visible(false);
+            ShowWindow(error_panel_,SW_HIDE);ShowWindow(error_text_,SW_HIDE);ShowWindow(retry_button_,SW_HIDE);
+            media_view_->Create(window_);media_view_->Resize(ContentRect());ShowWindow(media_view_->Window(),SW_SHOW);
+        }
+        else if (!backend_) StartBrowser();
         else if (error_visible_) Error(status_);
         else backend_->Visible(true);
     }
     InvalidateRect(window_, nullptr, FALSE); StateChanged();
+}
+void BrowserWindow::PersonalView(bool personal) {
+    ++bridge_->document_generation;personal_view_=personal;
+    const auto file=std::filesystem::path(state_file_).parent_path()/L"PersonalLibrary.enabled";
+    std::error_code error;
+    std::filesystem::create_directories(file.parent_path(),error);std::ofstream marker(file);marker<<(personal?'1':'0');
+    SwitchView(false);
 }
 HRESULT BrowserWindow::Show(uint32_t view) {
     if (view > TTP_BROWSER_VIEW_HIDE) return E_INVALIDARG;
@@ -568,7 +595,8 @@ HRESULT BrowserWindow::GetState(ttp_browser_state* state) const {
     if (window_) GetWindowRect(window_, &state->bounds);
     state->flags = (window_ && IsWindowVisible(window_) ? TTP_BROWSER_STATE_VISIBLE : 0) |
         (autostart_ ? TTP_BROWSER_STATE_AUTOSTART : 0) | (downloads_view_ ? TTP_BROWSER_STATE_DOWNLOADS : 0) |
-        (browser_ready_ ? modern_attempt_ ? TTP_BROWSER_STATE_WEBVIEW2 : TTP_BROWSER_STATE_IE : 0);
+        (personal_view_ ? (media_view_->IsWebView()?TTP_BROWSER_STATE_WEBVIEW2:media_view_->IsIe()?TTP_BROWSER_STATE_IE:0) :
+         browser_ready_ ? modern_attempt_ ? TTP_BROWSER_STATE_WEBVIEW2 : TTP_BROWSER_STATE_IE : 0);
     return S_OK;
 }
 const std::wstring& BrowserWindow::LinkText(size_t index) const {
@@ -656,8 +684,14 @@ void BrowserWindow::BorderContextMenu(POINT point) {
     const HMENU menu=CreatePopupMenu();if(!menu)return;
     AppendMenuW(menu,MF_STRING|(downloads_view_?0:MF_CHECKED),TTP_BROWSER_MUSIC+1,L"音乐窗");
     AppendMenuW(menu,MF_STRING|(downloads_view_?MF_CHECKED:0),TTP_BROWSER_DOWNLOADS+1,L"下载管理");
+    if(host_.media_source_version) {
+        AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+        AppendMenuW(menu,MF_STRING|(!downloads_view_&&personal_view_?MF_CHECKED:0),5301,L"个人媒体库（OpenSubsonic / OpenList）");
+        AppendMenuW(menu,MF_STRING|(!downloads_view_&&!personal_view_?MF_CHECKED:0),5302,L"音乐网页");
+    }
     const UINT selected=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,window_,nullptr);
     DestroyMenu(menu);
+    if(selected==5301 || selected==5302){PersonalView(selected==5301);return;}
     if(selected==TTP_BROWSER_MUSIC+1 || selected==TTP_BROWSER_DOWNLOADS+1)
         Activate(static_cast<int>(selected)-1);
 }
@@ -667,9 +701,9 @@ void BrowserWindow::Activate(int id) {
     case TTP_BROWSER_CLOSE: Show(TTP_BROWSER_VIEW_HIDE); break;
     case TTP_BROWSER_MUSIC: SwitchView(false); break;
     case TTP_BROWSER_DOWNLOADS: SwitchView(true); break;
-    case TTP_BROWSER_BACK: if (backend_) backend_->Back(); break;
+    case TTP_BROWSER_BACK: if(personal_view_)media_view_->Back();else if (backend_) backend_->Back(); break;
     case TTP_BROWSER_FORWARD: if (backend_) backend_->Forward(); break;
-    case TTP_BROWSER_REFRESH: if (error_visible_) Retry(); else if (backend_) backend_->Refresh(); break;
+    case TTP_BROWSER_REFRESH: if(personal_view_)media_view_->Refresh();else if (error_visible_) Retry(); else if (backend_) backend_->Refresh(); break;
     case TTP_BROWSER_STARTUP: autostart_ = !autostart_; StateChanged(); InvalidateRect(window_, nullptr, FALSE); break;
     case TTP_BROWSER_LINK:
         // 0040C701 delegates the link to the Shell; never navigate the embedded
@@ -739,6 +773,7 @@ BOOL BrowserWindow::Translate(MSG* message) {
         if (message->wParam == VK_ESCAPE || message->wParam == VK_F11) { Show(TTP_BROWSER_VIEW_HIDE); return TRUE; }
         if (message->wParam == VK_F5 && !downloads_view_) { Activate(TTP_BROWSER_REFRESH); return TRUE; }
     }
+    if(!downloads_view_ && personal_view_)return media_view_->Translate(message);
     if (!downloads_view_ && !error_visible_ && backend_ && backend_->Translate(message)) return TRUE;
     return error_visible_ ? IsDialogMessageW(window_, message) : FALSE;
 }
@@ -828,7 +863,7 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
         return 0;
     } break;
     case kActions: self->ProcessActions(); return 0;
-    case kFallback: if (!self->destroying_ && !self->browser_ready_) self->StartBrowser(true); return 0;
+    case kFallback: if (!self->destroying_ && !self->personal_view_ && !self->browser_ready_) self->StartBrowser(true); return 0;
     case WM_DESTROY:
         self->destroying_ = true; self->bridge_->alive = false; self->actions_.clear();
         KillTimer(hwnd,kNavigationTimer);KillTimer(hwnd,kLinkTimer); if (self->backend_) self->backend_->Shutdown();
@@ -838,3 +873,5 @@ LRESULT CALLBACK BrowserWindow::Proc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     return DefWindowProcW(hwnd,message,wp,lp);
 }
 }
+
+void ttpbrowser::BrowserWindow::MediaSettingsChanged(){if(media_view_)media_view_->ReloadProfiles();}

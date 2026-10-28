@@ -26,6 +26,7 @@ unset(TTPBROWSER_WEBVIEW2_LOADER CACHE)
 add_library(ttpbrowser SHARED
   src/module.cpp src/ttpbrowser.def "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc"
   src/browser_window.cpp src/browser_bridge.cpp
+  src/media_library.cpp src/media_view.cpp src/media_web_view.cpp src/media_settings.cpp src/media_page.rc
   src/webview_backend.cpp src/ie_backend.cpp
   src/downloads.cpp src/download_skin.cpp src/download_file_actions.cpp src/http_download_queue.cpp
   "${_rebuild}/src/audio/legacy_cache.cpp"
@@ -41,9 +42,13 @@ target_compile_features(ttpbrowser PRIVATE cxx_std_20)
 target_compile_definitions(ttpbrowser PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(ttpbrowser PRIVATE /W4 /permissive- /EHsc /utf-8)
 target_link_libraries(ttpbrowser PRIVATE ttplayer_wtl_headers ole32 oleaut32 comsuppw uuid
-  user32 gdi32 comctl32 comdlg32 shell32 shlwapi wininet msimg32 advapi32 version
+  user32 gdi32 comctl32 comdlg32 shell32 shlwapi wininet msimg32 advapi32 crypt32 gdiplus version uxtheme
   "${TTPBROWSER_WEBVIEW2_SDK}/build/native/x86/WebView2LoaderStatic.lib")
 set_target_properties(ttpbrowser PROPERTIES OUTPUT_NAME ttpbrowser)
+# XP does not initialize static TLS in an optional LoadLibrary DLL.
+# YY-Thunks must wrap the CRT entry point as well as provide API imports.
+target_link_options(ttpbrowser PRIVATE /ENTRY:DllMainCRTStartupForYY_Thunks
+  /alternatename:_YY_ThunksOriginalDllMainCRTStartup@12=__DllMainCRTStartup@12)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_command(TARGET ttpbrowser POST_BUILD
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_legacy_imports.py"
@@ -55,6 +60,34 @@ install(TARGETS ttpbrowser RUNTIME DESTINATION . COMPONENT Runtime)
 option(TTPBROWSER_BUILD_TESTS "Build music window DLL contract tests" OFF)
 if(TTPBROWSER_BUILD_TESTS)
   enable_testing()
+  add_library(ttpbrowser_https_stub SHARED tests/https_transport_stub.cpp tests/https_transport_stub.def)
+  target_include_directories(ttpbrowser_https_stub PRIVATE include)
+  target_compile_options(ttpbrowser_https_stub PRIVATE /EHsc /utf-8)
+  target_link_options(ttpbrowser_https_stub PRIVATE /ENTRY:DllMainCRTStartupForYY_Thunks
+    /alternatename:_YY_ThunksOriginalDllMainCRTStartup@12=__DllMainCRTStartup@12)
+  add_executable(ttpbrowser_https_api8_tests tests/https_api8_tests.cpp)
+  target_include_directories(ttpbrowser_https_api8_tests PRIVATE include)
+  target_compile_options(ttpbrowser_https_api8_tests PRIVATE /EHsc /utf-8)
+  add_executable(ttpbrowser_media_tests tests/media_library_tests.cpp src/media_library.cpp src/browser_bridge.cpp "${_rebuild}/src/core/text.cpp")
+  target_include_directories(ttpbrowser_media_tests PRIVATE include src "${_rebuild}/include" "${_rebuild}/third_party/ttpcomm-sdk/include")
+  target_compile_definitions(ttpbrowser_media_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(ttpbrowser_media_tests PRIVATE /W4 /EHsc /utf-8)
+  target_link_libraries(ttpbrowser_media_tests PRIVATE wininet advapi32 crypt32 ole32 oleaut32)
+  add_test(NAME ttpbrowser_media_tests COMMAND ttpbrowser_media_tests)
+  add_executable(ttpbrowser_media_settings_tests tests/media_settings_tests.cpp src/media_settings.cpp src/media_library.cpp src/media_page.rc src/browser_bridge.cpp "${_rebuild}/src/core/text.cpp")
+  target_include_directories(ttpbrowser_media_settings_tests PRIVATE include src "${_rebuild}/include" "${_rebuild}/third_party/ttpcomm-sdk/include")
+  target_compile_definitions(ttpbrowser_media_settings_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(ttpbrowser_media_settings_tests PRIVATE /W4 /EHsc /utf-8)
+  target_link_libraries(ttpbrowser_media_settings_tests PRIVATE wininet advapi32 crypt32 ole32 oleaut32 comctl32 gdiplus uxtheme)
+  add_test(NAME ttpbrowser_media_settings_tests COMMAND ttpbrowser_media_settings_tests)
+  if(NOT TTPBROWSER_STANDALONE)
+    add_executable(ttpbrowser_media_host_tests tests/media_host_tests.cpp "${_rebuild}/src/app/ttplayer.manifest")
+    target_include_directories(ttpbrowser_media_host_tests PRIVATE include)
+    target_compile_definitions(ttpbrowser_media_host_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(ttpbrowser_media_host_tests PRIVATE /W4 /EHsc /utf-8)
+    target_link_libraries(ttpbrowser_media_host_tests PRIVATE ttplayer_core gdiplus oleacc)
+    add_dependencies(ttpbrowser_media_host_tests ttpbrowser)
+  endif()
   add_executable(ttpbrowser_contract_tests tests/contract_tests.cpp)
   target_include_directories(ttpbrowser_contract_tests PRIVATE include)
   target_compile_features(ttpbrowser_contract_tests PRIVATE cxx_std_20)
@@ -106,7 +139,7 @@ if(TTPBROWSER_BUILD_TESTS)
   add_test(NAME ttpbrowser_download_mouse_state_tests COMMAND ttpbrowser_download_mouse_state_tests)
   # Exercise the same themed common-controls implementation as the real EXE.
   # Without its v6 activation context, tooltip write-buffer bugs can be missed.
-  foreach(browser_test ttpbrowser_contract_tests ttpbrowser_runtime_tests ttpbrowser_download_tests
+  foreach(browser_test ttpbrowser_media_settings_tests ttpbrowser_contract_tests ttpbrowser_runtime_tests ttpbrowser_download_tests
       ttpbrowser_mouse_contract_tests ttpbrowser_file_actions_tests ttpbrowser_download_mouse_state_tests)
     target_sources(${browser_test} PRIVATE "${_rebuild}/src/app/ttplayer.manifest")
   endforeach()

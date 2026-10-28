@@ -2,6 +2,8 @@
 
 实现与验证日期：2026-10-27
 
+`2026.10.28` 的个人媒体库采用 DLL 内置网页，按 WebView2 → IE → 原生列表回退。设置已合并到主程序「选项 → 网络连接 → 音乐窗」，服务适配、播放和下载仍由原生实现负责。此次需同步更新主程序与 DLL；入口、配置与验证见 [PERSONAL_MEDIA.zh-CN.md](PERSONAL_MEDIA.zh-CN.md)。
+
 ## 用途与部署
 
 ttpbrowser.dll 是 Win32/x86 可选组件，与 TTPlayerRebuild.exe 放在同一目录。
@@ -10,7 +12,7 @@ DLL 缺失、位数错误、导出缺失或 ABI 不兼容时，不显示音乐�
 快捷键设置行、播放列表下载入口及下载设置页；陈旧命令和热键也不会打开窗口。
 DLL 按进程启动时检测，添加或移除后需要重启播放器。
 
-默认首页恢复为 http://mini.qianqian.com/index.html。
+网页首页保留为 http://mini.qianqian.com/index.html。配套新宿主使用默认历史首页配置时，音乐窗首先显示个人媒体库；可通过边框右键切回音乐网页。
 2026-10-22 实测 HTTP 响应为 302，Location 是
 http://c.taihe.com/res/download_pcclient/index.html。
 原始响应保留在 ../../reverse/music-window-5790/portal-http-20261022.txt。
@@ -23,7 +25,7 @@ http://c.taihe.com/res/download_pcclient/index.html。
 在 64 位 Windows 10/11 上调用已安装的 WebView2 Runtime 运行 Chromium。
 安装只需部署 ttpbrowser.dll；Loader 与 Runtime 是不同组件，合并 Loader 不等于安装 Runtime。
 
-默认策略是 WebView2 优先，Runtime 不可用或初始化失败时使用 IE/MSHTML。
+历史音乐网页的默认策略是 WebView2 优先，Runtime 不可用或初始化失败时使用 IE/MSHTML。个人媒体库使用内置网页；Runtime 缺失或初始化失败后尝试 IE 专用的 ES5 页面，IE 控件或脚本不可用才回退原生列表。指定 IE 时从 IE 开始。
 Windows XP 没有 WebView2 支持，保留 IE 控件路线。Windows 7/8/8.1 的 WebView2
 停留在 109，不应把现代 Evergreen 当成这些系统的可维护方案。本次已对主程序与
 DLL执行 XP/Win7 静态导入审计；当前主机上的 IE 测试不等同于旧系统 VM 实测。
@@ -63,7 +65,7 @@ DLL：TTPlayer_BrowserWnd、浏览器后端、前进/后退/刷新、音乐/下�
 下载列表持久化位置沿用设置目录下 HttpDownloads/cachelist.xml；旧缓存列表导入保留为内部迁移接口。
 移除任务/删除记录保留已下载文件；“删除文件”交给 Shell 请求可撤销删除，并可选择同时删除主程序明确关联的歌词。
 按用户要求不实现“每周推荐”列表，也不提供外框推荐菜单。
-窗口边框及皮肤空白右键提供“音乐窗”“下载管理”两项，勾选当前页面；这项是用户指定的新增交互。
+窗口边框及皮肤空白右键提供“音乐窗”“下载管理”，勾选当前页面；支持个人媒体解析的新宿主另提供“个人媒体库”“音乐网页”选择。
 下载页沿用原版顶部设置、80px分类栏、自绘表头/进度和右键菜单；没有额外底部工具栏。
 音乐窗去掉系统缩放框，使用皮肤窗口区域及客户区拖动/八方向缩放。修复依据与边界见 [UI_FIX.zh-CN.md](UI_FIX.zh-CN.md)。
 背景按九宫格拉伸或平铺；默认皮肤缺少 `resize_rect` 时使用中心像素带，保留边角尺寸，详见 [NINE_PATCH_FIX.zh-CN.md](NINE_PATCH_FIX.zh-CN.md)。

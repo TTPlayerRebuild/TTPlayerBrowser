@@ -199,7 +199,15 @@ public:
     }
 };
 }
+bool WebView2PlatformSupported() {
+    OSVERSIONINFOEXW minimum{sizeof(minimum)};
+    minimum.dwMajorVersion=6;minimum.dwMinorVersion=1;
+    const auto mask=VerSetConditionMask(VerSetConditionMask(0,VER_MAJORVERSION,VER_GREATER_EQUAL),VER_MINORVERSION,VER_GREATER_EQUAL);
+    return VerifyVersionInfoW(&minimum,VER_MAJORVERSION|VER_MINORVERSION,mask)!=FALSE;
+}
 std::shared_ptr<BrowserBackend> MakeWebViewBackend() {
+    // Unsupported systems use IE/native without invoking the optional SDK.
+    if(!WebView2PlatformSupported())return {};
     // The SDK loader is linked into this module; the browser Runtime remains
     // optional. Detection failure keeps the existing automatic IE fallback.
     LPWSTR installed{};

@@ -1,6 +1,8 @@
 #include "ttpbrowser.h"
 #include "browser_window.h"
 #include "downloads.h"
+#include "media_library.h"
+#include "media_settings.h"
 #include <memory>
 #include <new>
 #include <string>
@@ -12,8 +14,10 @@ struct Module {
     ttp_browser_host host{};
     ttp_browser_config config{};
     std::wstring runtime, state_file, download_directory, home, cache_directory;
+    std::unique_ptr<ttpbrowser::media::Library> library;
     std::unique_ptr<ttpbrowser::Downloads> downloads;
     std::unique_ptr<ttpbrowser::BrowserWindow> browser;
+    std::unique_ptr<ttpbrowser::MediaSettings> settings;
 
     void CopyConfig(const ttp_browser_config& source) {
         runtime=source.runtime_directory ? source.runtime_directory : L"";
@@ -57,9 +61,14 @@ HRESULT WINAPI Create(const ttp_browser_host* h,const ttp_browser_config* c,void
             m->host.adjust_window_rect=h->adjust_window_rect;
         if(h->size>=offsetof(ttp_browser_host,resolve_associated_lyric)+sizeof(h->resolve_associated_lyric))
             m->host.resolve_associated_lyric=h->resolve_associated_lyric;
+        if(h->size>=offsetof(ttp_browser_host,media_source_version)+sizeof(h->media_source_version))
+            m->host.media_source_version=h->media_source_version;
+        if(h->size>=offsetof(ttp_browser_host,open_media_settings)+sizeof(h->open_media_settings))
+            m->host.open_media_settings=h->open_media_settings;
         m->host.size=sizeof(m->host);m->CopyConfig(*c);
+        m->library=std::make_unique<ttpbrowser::media::Library>(m->state_file);
         m->downloads=std::make_unique<ttpbrowser::Downloads>(m->host,m->config);
-        m->browser=std::make_unique<ttpbrowser::BrowserWindow>(m->host,m->config,*m->downloads);
+        m->browser=std::make_unique<ttpbrowser::BrowserWindow>(m->host,m->config,*m->downloads,*m->library);
         const auto hr=m->browser->Configure(m->config);if(FAILED(hr))return hr;
         *out=m.release();return S_OK;
     });
@@ -105,8 +114,22 @@ HRESULT WINAPI External(void* p,IDispatch** out) {
     if(!out)return E_POINTER;*out=nullptr;auto* m=Current(p);if(!m)return E_INVALIDARG;
     return Guard([&]() -> HRESULT {return m->browser->ExternalDispatch(out);});
 }
+HRESULT WINAPI ResolveSource(void* p,const wchar_t* source,BOOL(WINAPI* canceled)(void*),void* context,BSTR* output) {
+    if(!output)return E_POINTER;*output=nullptr;if(!p||!source)return E_INVALIDARG;
+    return Guard([&]() -> HRESULT {
+        try {const auto url=static_cast<Module*>(p)->library->Resolve(source,[=]{return canceled&&canceled(context);});
+            *output=SysAllocString(url.c_str());return *output?S_OK:E_OUTOFMEMORY;}
+        catch(const ttpbrowser::media::Error& e){return e.code;}
+    });
+}
+HRESULT WINAPI CreateSettings(void* p,HWND parent,HWND* out) {
+    if(!out)return E_POINTER;*out=nullptr;auto* m=Current(p);if(!m||!IsWindow(parent))return E_INVALIDARG;
+    return Guard([&]() -> HRESULT {m->settings=std::make_unique<ttpbrowser::MediaSettings>(*m->library,[m]{m->browser->MediaSettingsChanged();});
+        *out=m->settings->Create(parent);return *out?S_OK:E_FAIL;});
+}
+HRESULT WINAPI CommitSettings(void* p) {auto* m=Current(p);if(!m)return E_INVALIDARG;return Guard([&]{return m->settings?m->settings->Commit():S_OK;});}
 const ttp_browser_api api={sizeof(ttp_browser_api),TTP_BROWSER_ABI_VERSION,
-    Create,Destroy,Configure,SetSkin,Show,Window,Translate,State,Enqueue,Prefetch,External};
+    Create,Destroy,Configure,SetSkin,Show,Window,Translate,State,Enqueue,Prefetch,External,ResolveSource,CreateSettings,CommitSettings};
 }
 extern "C" const ttp_browser_api* WINAPI ttp_browser_get_api(uint32_t version) {
     return version==TTP_BROWSER_ABI_VERSION ? &api : nullptr;

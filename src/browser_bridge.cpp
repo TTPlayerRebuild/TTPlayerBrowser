@@ -9,7 +9,12 @@ namespace ttpbrowser {
 std::wstring HttpOrigin(const std::wstring& url) {
     if (url.empty() || url.size() > 8192 || std::any_of(url.begin(), url.end(), [](wchar_t c) { return c <= L' ' || c == L'\\'; })) return {};
     URL_COMPONENTSW parts{sizeof(parts)};
-    parts.dwHostNameLength = parts.dwUserNameLength = parts.dwPasswordLength = static_cast<DWORD>(-1);
+    // XP needs caller-owned buffers; pointer-into-input output is Vista+.
+    const auto capacity = static_cast<DWORD>(url.size() + 1);
+    std::vector<wchar_t> fields(static_cast<size_t>(capacity) * 3);
+    parts.lpszHostName = fields.data(); parts.dwHostNameLength = capacity;
+    parts.lpszUserName = fields.data() + capacity; parts.dwUserNameLength = capacity;
+    parts.lpszPassword = fields.data() + capacity * 2; parts.dwPasswordLength = capacity;
     if (!InternetCrackUrlW(url.c_str(), static_cast<DWORD>(url.size()), 0, &parts) ||
         (parts.nScheme != INTERNET_SCHEME_HTTP && parts.nScheme != INTERNET_SCHEME_HTTPS) ||
         !parts.dwHostNameLength || parts.dwUserNameLength || parts.dwPasswordLength) return {};
