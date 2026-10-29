@@ -15,7 +15,7 @@ enum {SourceList=5300,Url,AuthBox,User,Secret,Root,Password,Proxy,Save,Test,Stat
       Add=5320,Remove,Up,Down,Edit};
 HINSTANCE Module(){HMODULE h{};GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,reinterpret_cast<LPCWSTR>(&Module),&h);return h;}
 std::wstring Text(HWND h){int n=GetWindowTextLengthW(h);std::wstring s(n+1,L'\0');GetWindowTextW(h,s.data(),n+1);s.resize(n);return s;}
-const wchar_t* TypeName(Provider type){return type==Provider::OpenList?L"OpenList":L"OpenSubsonic";}
+const wchar_t* TypeName(Provider type){return type==Provider::WebDav?L"WebDAV":type==Provider::OpenList?L"OpenList":L"OpenSubsonic";}
 std::wstring Trim(std::wstring s){auto first=s.find_first_not_of(L" \t\r\n");if(first==s.npos)return {};return s.substr(first,s.find_last_not_of(L" \t\r\n")-first+1);}
 void Center(HWND dialog,HWND owner){RECT r{},p{};GetWindowRect(dialog,&r);GetWindowRect(owner,&p);MONITORINFO m{sizeof(m)};GetMonitorInfoW(MonitorFromWindow(owner,MONITOR_DEFAULTTONEAREST),&m);const LONG w=r.right-r.left,h=r.bottom-r.top;
     SetWindowPos(dialog,nullptr,std::clamp((p.left+p.right-w)/2,m.rcWork.left,std::max(m.rcWork.left,m.rcWork.right-w)),std::clamp((p.top+p.bottom-h)/2,m.rcWork.top,std::max(m.rcWork.top,m.rcWork.bottom-h)),0,0,SWP_NOSIZE|SWP_NOZORDER);}
@@ -73,17 +73,17 @@ struct MediaSettings::Impl {
         std::shared_ptr<std::atomic<bool>> cancel;std::future<std::wstring> test;uint64_t generation{},test_generation{};
         ~Editor(){if(cancel)*cancel=true;if(test.valid())test.wait();}
         HWND Get(int id){return GetDlgItem(dialog,id);}void StatusText(const std::wstring& text){SetWindowTextW(Get(Status),text.c_str());}
-        Provider ProviderValue(){return SendMessageW(Get(Type),CB_GETCURSEL,0,0)==1?Provider::OpenList:Provider::Subsonic;}
+        Provider ProviderValue(){return static_cast<Provider>(std::clamp<LRESULT>(SendMessageW(Get(Type),CB_GETCURSEL,0,0),0,2));}
         void AuthControls(){const auto a=static_cast<Auth>(SendMessageW(Get(AuthBox),CB_GETITEMDATA,SendMessageW(Get(AuthBox),CB_GETCURSEL,0,0),0));
-            EnableWindow(Get(User),a==Auth::Password);EnableWindow(Get(Secret),a!=Auth::Guest);for(int id:{Root,Password,Proxy})EnableWindow(Get(id),ProviderValue()==Provider::OpenList);}
+            EnableWindow(Get(User),a==Auth::Password);EnableWindow(Get(Secret),a!=Auth::Guest);EnableWindow(Get(Root),ProviderValue()!=Provider::Subsonic);for(int id:{Password,Proxy})EnableWindow(Get(id),ProviderValue()==Provider::OpenList);}
         void AuthList(Auth selected){SendMessageW(Get(AuthBox),CB_RESETCONTENT,0,0);const wchar_t* names[]={L"密码登录",L"OpenSubsonic API 密钥",L"OpenList 登录令牌",L"OpenList 访客"};
-            for(int a=0;a<4;++a){if(ProviderValue()==Provider::Subsonic?a>1:a==1)continue;const auto i=SendMessageW(Get(AuthBox),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(names[a]));SendMessageW(Get(AuthBox),CB_SETITEMDATA,i,a);if(a==static_cast<int>(selected))SendMessageW(Get(AuthBox),CB_SETCURSEL,i,0);}AuthControls();}
+            for(int a=0;a<4;++a){if(ProviderValue()==Provider::Subsonic?a>1:ProviderValue()==Provider::WebDav?(a!=0&&a!=3):a==1)continue;const auto i=SendMessageW(Get(AuthBox),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(ProviderValue()==Provider::WebDav?(a==0?L"用户名和密码（Basic）":L"匿名访问"):names[a]));SendMessageW(Get(AuthBox),CB_SETITEMDATA,i,a);if(a==static_cast<int>(selected))SendMessageW(Get(AuthBox),CB_SETCURSEL,i,0);}AuthControls();}
         Profile Edited(){auto p=original;p.name=Trim(Text(Get(Name)));p.provider=ProviderValue();p.url=NormalizeUrl(Text(Get(Url)));p.username=Text(Get(User));p.secret=Text(Get(Secret));p.root=Text(Get(Root));if(p.root.empty())p.root=L"/";
             if(p.name.empty()||p.name.size()>128)throw Error{E_INVALIDARG,L"请填写来源名称（最多 128 字）"};
             if(p.root.size()>4095||p.root.find_first_of(L"\r\n\\")!=p.root.npos)throw Error{E_INVALIDARG,L"目录路径无效"};
             p.directory_password=Text(Get(Password));p.auth=static_cast<Auth>(SendMessageW(Get(AuthBox),CB_GETITEMDATA,SendMessageW(Get(AuthBox),CB_GETCURSEL,0,0),0));p.proxy=Button_GetCheck(Get(Proxy))==BST_CHECKED;
             if(p.provider!=original.provider)p.id=NewProfile(p.provider).id;return p;}
-        void Init(){loading=true;SetWindowTextW(dialog,adding?L"添加媒体来源":L"编辑媒体来源");SendMessageW(Get(Type),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"OpenSubsonic"));SendMessageW(Get(Type),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"OpenList"));SendMessageW(Get(Type),CB_SETCURSEL,static_cast<unsigned>(original.provider),0);
+        void Init(){loading=true;SetWindowTextW(dialog,adding?L"添加媒体来源":L"编辑媒体来源");SendMessageW(Get(Type),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"OpenSubsonic"));SendMessageW(Get(Type),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"OpenList"));SendMessageW(Get(Type),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"WebDAV"));SendMessageW(Get(Type),CB_SETCURSEL,static_cast<unsigned>(original.provider),0);
             SetWindowTextW(Get(Name),original.name.c_str());SetWindowTextW(Get(Url),original.url.c_str());SetWindowTextW(Get(User),original.username.c_str());SetWindowTextW(Get(Secret),original.secret.c_str());SetWindowTextW(Get(Root),original.root.c_str());SetWindowTextW(Get(Password),original.directory_password.c_str());Button_SetCheck(Get(Proxy),original.proxy?BST_CHECKED:BST_UNCHECKED);
             for(int id:{Name,Url,User,Secret,Root,Password})SendMessageW(Get(id),EM_SETLIMITTEXT,id==Name?128:id==Url||id==Root?4095:1024,0);
             AuthList(original.auth);loading=false;StatusText(L"凭据由 Windows 当前用户加密保存。");SetTimer(dialog,1,100,nullptr);Center(dialog,GetParent(dialog));}

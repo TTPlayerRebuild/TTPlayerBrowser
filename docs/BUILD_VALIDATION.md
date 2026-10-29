@@ -1,5 +1,24 @@
 # 构建与发行验证记录
 
+## WebDAV / 2026-10-29
+
+新增 WebDAV 来源，支持 Basic/匿名认证、目录浏览、中文路径、当前目录筛选、播放、加入列表和下载。ttp_https 新增 ABI 9 的 PROPFIND/Depth 与认证 Range；组件缺失、旧版或明确要求原生时回退 WinINet。认证通过宿主尾部接口单独传递，不写进播放列表或下载队列。
+
+XP SP3 / IE8、Win7 SP1 / IE11 的真实目录、页面、设置、原生列表、原生解码/定位与下载字节一致性验证全部通过。缺少及旧版 ttp_https 的系统网络回退、真实 HTTPS、未受信证书拒绝均通过。两台虚拟机的新版主程序启动测试退出 0。本机实际 WebView2 页面通过；旧 ABI 8 传输回归 19/19。具体边界与测试方式见 [WebDAV 验证记录](WEBDAV.md)，证据位于 out/webdav-20261029。
+
+已部署以下 2026.10.29 产物到 rebuild/build/Release；未改动现有媒体来源配置。
+
+| 文件 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| `rebuild/build/Release/TTPlayerRebuild.exe` | 4,500,480 | `d06fca5bd6ca3d8e3c8fe1ee4992395a79d3dfbfde960c895ace8ee3d50cb808` |
+| `rebuild/build/Release/TTPlayer.exe` | 4,500,480 | `e05b49e9eacf52834f600f86c54a4273d09e5248ad0a1268a8e21a3fa5d53f79` |
+| `rebuild/build/Release/ttpbrowser.dll` | 778,240 | `dce223916b8dd4968d2d6fca2a94d948dd7c7ae5f1eb6c9d5e528007df60f0df` |
+| `rebuild/build/Release/AddIn/ttp_https.dll` | 477,184 | `fa981d91f06867bdd0c551a3ee4dc30d7197c37edc24d80932dd4a8ddb00f300` |
+| `ttpbrowser/build/Release/ttpbrowser-2026.10.29.zip` | 357,768 | `10c31bd795e30de250a122e5a0dfdef158fcc11270f51fb36b7199f91a8d399d` |
+| `mbedtlsmin/build/Release/ttp_https-2026.10.29.zip` | 286,753 | `00d98e46ae006ccbedf611f97563f10aea8811557398ac7c9df5c5a304afb62e` |
+
+独立 ZIP 内容与 XP/Win7 静态导入检查通过。无额外 WebView2Loader.dll；没有发布远程 Release。
+
 ## IE 设置图标与焦点外观 / 2026-10-28 p12
 
 IE 页面的齿轮改用与 WebView2 设置 SVG 相同的轮廓、描边、颜色和缩放，保持 16×16 图标在 22×22 按钮内居中。覆盖底栏通用按钮的字号与内边距，设置 `hideFocus` 并移除默认轮廓，解决 XP 的系统虚线焦点框；键盘聚焦时用浅色背景提示，鼠标操作清除该提示。设置及来源菜单交互保持可用。

@@ -10,6 +10,9 @@
 #include <cwctype>
 #include <set>
 #include <optional>
+#include <msxml6.h>
+#include <comdef.h>
+#include <wrl/client.h>
 
 namespace ttpbrowser::media {
 namespace {
@@ -31,7 +34,7 @@ void CheckHttpStatus(unsigned status) {
     Require(status>=200&&status<300,status>=300&&status<400?L"服务返回了重定向，请在设置中填写最终服务地址":L"HTTP 请求失败，请检查权限和服务地址",HRESULT_FROM_WIN32(status==401||status==403?ERROR_ACCESS_DENIED:ERROR_BAD_NET_RESP));
 }
 std::optional<std::string> PortableRequest(const std::wstring& url,const std::string& body,
-    const std::wstring& token,RequestGuard& guard) {
+    const std::wstring& token,RequestGuard& guard,const char* method=nullptr,const char* depth=nullptr) {
     wchar_t executable[32768]{};
     const auto size=GetModuleFileNameW(nullptr,executable,32768);
     if(!size || size>=32768)return std::nullopt;
@@ -39,8 +42,9 @@ std::optional<std::string> PortableRequest(const std::wstring& url,const std::st
     struct Module {HMODULE h;~Module(){if(h)FreeLibrary(h);}} module{LoadLibraryExW(path.c_str(),nullptr,LOAD_WITH_ALTERED_SEARCH_PATH)};
     if(!module.h)return std::nullopt;
     const auto get=reinterpret_cast<ttp_https_get_api_fn>(GetProcAddress(module.h,"ttp_https_get_api"));
-    const auto* base=get?get(TTP_HTTPS_REQUEST_ABI_VERSION):nullptr;
-    if(!base || base->size<sizeof(ttp_https_api_v8) || base->abi_version!=TTP_HTTPS_REQUEST_ABI_VERSION)return std::nullopt;
+    const auto version=depth?TTP_HTTPS_WEBDAV_ABI_VERSION:TTP_HTTPS_REQUEST_ABI_VERSION;
+    const auto* base=get?get(version):nullptr;
+    if(!base || base->size<(depth?sizeof(ttp_https_api_v9):sizeof(ttp_https_api_v8)) || base->abi_version!=version)return std::nullopt;
     const auto* api=reinterpret_cast<const ttp_https_api_v8*>(base);
     if(!api->stream_open_ex || !api->base.stream_read || !api->base.stream_close)return std::nullopt;
     const auto auth=Utf8(token);
@@ -48,13 +52,16 @@ std::optional<std::string> PortableRequest(const std::wstring& url,const std::st
     auto& stream=request.stream;stream.size=sizeof(stream);stream.timeout_ms=5000;stream.auto_detect=-1;
     auto& network=stream.request;network.size=sizeof(network);network.url=url.c_str();network.proxy_type=1;
     network.canceled=RequestGuard::Canceled;network.cancel_context=&guard;
-    request.method=body.empty()?"GET":"POST";request.user_agent="TTPlayer-Media/1.0";
-    request.accept="application/json, image/*";request.authorization=auth.c_str();
-    request.content_type=body.empty()?nullptr:"application/json; charset=utf-8";
+    request.method=method?method:body.empty()?"GET":"POST";request.user_agent="TTPlayer-Media/1.0";
+    request.accept=depth?"application/xml, text/xml":"application/json, image/*";request.authorization=auth.c_str();
+    request.content_type=body.empty()?nullptr:depth?"application/xml; charset=utf-8":"application/json; charset=utf-8";
     request.body=reinterpret_cast<const unsigned char*>(body.data());request.body_size=static_cast<uint32_t>(body.size());
     struct Handle {const ttp_https_api_v7& api;ttp_https_stream* h{};~Handle(){if(h)api.stream_close(h);}} handle{api->base};
     unsigned status{};char error[512]{};
-    const auto result=api->stream_open_ex(&request,&handle.h,&status,error,sizeof(error));
+    ttp_https_stream_request_ex2 dav{sizeof(dav),request,depth,0};
+    const auto* api9=depth?reinterpret_cast<const ttp_https_api_v9*>(base):nullptr;
+    if(api9&&!api9->stream_open_ex2)return std::nullopt;
+    const auto result=api9?api9->stream_open_ex2(&dav,&handle.h,&status,error,sizeof(error)):api->stream_open_ex(&request,&handle.h,&status,error,sizeof(error));
     guard.Check();
     if(result==TTP_HTTPS_USE_WINHTTP && !handle.h)return std::nullopt;
     const auto check=[&](int code){guard.Check();if(code!=TTP_HTTPS_OK)throw Error{
@@ -181,16 +188,16 @@ std::wstring NormalizeUrl(std::wstring url) {
 bool IsSource(const std::wstring& source){return source.starts_with(prefix);}
 std::wstring Source(const Profile& p,const Item& item,bool download) {
     auto ext=item.suffix;
-    if(ext.empty()&&p.provider==Provider::OpenList){ext=std::filesystem::path(item.title).extension().wstring();if(!ext.empty())ext.erase(0,1);}
+    if(ext.empty()&&p.provider!=Provider::Subsonic){ext=std::filesystem::path(item.title).extension().wstring();if(!ext.empty())ext.erase(0,1);}
     if(ext.empty()||ext.size()>12||!std::all_of(ext.begin(),ext.end(),[](wchar_t c){return iswalnum(c)!=0;}))ext=L"mp3";
     return prefix+Encode(ProfileKey(p))+L"/"+(download?L"download/":L"play/")+Encode(item.id)+L"/audio."+ext;
 }
-std::string Request(const std::wstring& url,const std::string& body,const std::wstring& token,const Cancel& cancel) {
+static std::string RequestImpl(const std::wstring& url,const std::string& body,const std::wstring& token,const Cancel& cancel,const char* method=nullptr,const char* depth=nullptr) {
     RequestGuard guard{cancel};guard.Check();
     Require(url.size()<=8192&&url.find_first_of(L"\r\n")==url.npos&&url.find(L'\0')==url.npos&&
         body.size()<=1024*1024&&token.size()<=16384&&std::all_of(token.begin(),token.end(),[](wchar_t c){return c>=32&&c<=126;}),L"请求参数无效");
     const auto parsed=ParseHttpUrl(url);
-    if(auto result=PortableRequest(url,body,token,guard))return std::move(*result);
+    if(auto result=PortableRequest(url,body,token,guard,method,depth))return std::move(*result);
     guard.Check();
     Internet session{InternetOpenW(L"TTPlayer-Media/1.0",INTERNET_OPEN_TYPE_PRECONFIG,nullptr,nullptr,0)};
     Require(session.h!=nullptr,L"无法初始化网络",E_FAIL);
@@ -200,10 +207,11 @@ std::string Request(const std::wstring& url,const std::string& body,const std::w
     const wchar_t* accept[]={L"*/*",nullptr};
     DWORD flags=INTERNET_FLAG_RELOAD|INTERNET_FLAG_NO_CACHE_WRITE|INTERNET_FLAG_NO_COOKIES|INTERNET_FLAG_NO_AUTH|INTERNET_FLAG_NO_AUTO_REDIRECT|INTERNET_FLAG_NO_UI;
     if(parsed.scheme==INTERNET_SCHEME_HTTPS)flags|=INTERNET_FLAG_SECURE;
-    Internet request{HttpOpenRequestW(connection.h,body.empty()?L"GET":L"POST",parsed.path.c_str(),nullptr,nullptr,accept,flags,0)};
+    Internet request{HttpOpenRequestW(connection.h,method?Wide(method).c_str():body.empty()?L"GET":L"POST",parsed.path.c_str(),nullptr,nullptr,accept,flags,0)};
     Require(request.h!=nullptr,L"无法建立请求",HRESULT_FROM_WIN32(GetLastError()));
-    std::wstring headers=L"Accept: application/json, image/*\r\n";
-    if(!body.empty())headers+=L"Content-Type: application/json; charset=utf-8\r\n";
+    std::wstring headers=depth?L"Accept: application/xml, text/xml\r\n":L"Accept: application/json, image/*\r\n";
+    if(!body.empty())headers+=depth?L"Content-Type: application/xml; charset=utf-8\r\n":L"Content-Type: application/json; charset=utf-8\r\n";
+    if(depth)headers+=L"Depth: "+Wide(depth)+L"\r\n";
     if(!token.empty())headers+=L"Authorization: "+token+L"\r\n";
     guard.Check();
     Require(HttpSendRequestW(request.h,headers.c_str(),static_cast<DWORD>(headers.size()),body.empty()?nullptr:const_cast<char*>(body.data()),static_cast<DWORD>(body.size()))!=FALSE,L"连接失败，请检查服务地址、网络和证书",HRESULT_FROM_WIN32(GetLastError()));
@@ -215,7 +223,12 @@ std::string Request(const std::wstring& url,const std::string& body,const std::w
     return result;
 }
 
-Library::Library(std::filesystem::path state_file,Transport transport):file_(state_file.parent_path()/L"MediaLibrary.dat"),transport_(std::move(transport)) {
+std::string Request(const std::wstring& url,const std::string& body,const std::wstring& token,const Cancel& cancel){return RequestImpl(url,body,token,cancel);}
+std::string WebDavRequest(const std::wstring& url,const std::wstring& auth,const Cancel& cancel){
+    return RequestImpl(url,R"(<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:displayname/><d:getcontentlength/></d:prop></d:propfind>)",auth,cancel,"PROPFIND","1");
+}
+#include "media_webdav.inl"
+Library::Library(std::filesystem::path state_file,Transport transport,DavTransport dav):file_(state_file.parent_path()/L"MediaLibrary.dat"),transport_(std::move(transport)),dav_(std::move(dav)) {
     profiles_={{Provider::Subsonic,Auth::Password,L"subsonic",L"OpenSubsonic",L"http://127.0.0.1:4533"},
                {Provider::OpenList,Auth::Guest,L"openlist",L"OpenList",L"http://127.0.0.1:5244"}};
     if(!std::filesystem::exists(file_))return;
@@ -230,11 +243,11 @@ Library::Library(std::filesystem::path state_file,Transport transport):file_(sta
         for(const auto& node:j["profiles"].items) {
             Require(loaded.size()<64,L"媒体来源过多");Profile p;p.id=Field(node,"id");
             Require(!p.id.empty()&&p.id.size()<=80&&p.id.find_first_not_of(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")==p.id.npos&&ids.insert(p.id).second,L"媒体来源标识无效");
-            const auto provider=node["provider"].kind==Json::number?node["provider"].Integer():p.id==L"openlist"?1:0;Require(provider<=1,L"媒体来源类型无效");p.provider=static_cast<Provider>(provider);
+            const auto provider=node["provider"].kind==Json::number?node["provider"].Integer():p.id==L"openlist"?1:0;Require(provider<=2,L"媒体来源类型无效");p.provider=static_cast<Provider>(provider);
             p.name=Field(node,"name");
             if(p.name.empty()||(p.provider==Provider::Subsonic&&
                 (p.name==L"OpenSubsonic / Navidrome"||p.name==L"Navidrome / OpenSubsonic")))
-                p.name=p.provider==Provider::OpenList?L"OpenList":L"OpenSubsonic";
+                p.name=ProviderName(p.provider);
             p.url=NormalizeUrl(Field(node,"url"));p.username=Field(node,"username");p.secret=Field(node,"secret");p.root=Field(node,"root");
             p.directory_password=Field(node,"directoryPassword");p.proxy=node["proxy"].True();
             const auto auth=node["auth"].Integer();Require(auth<=3,L"无效认证方式");p.auth=static_cast<Auth>(auth);loaded.push_back(std::move(p));
@@ -256,10 +269,11 @@ void Library::Save(const std::vector<Profile>& profiles,unsigned active) {
     for(const auto& p:profiles){NormalizeUrl(p.url);
         Require(!p.id.empty()&&p.id.size()<=80&&p.id.find_first_not_of(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")==p.id.npos&&ids.insert(p.id).second,L"无效或重复的来源标识");
         Require(!p.name.empty()&&p.name.size()<=128&&p.name.find_first_of(L"\r\n\t")==p.name.npos,L"请填写有效的来源名称（最多 128 字）");
-        Require(static_cast<unsigned>(p.provider)<=1,L"无效来源类型");const auto auth=static_cast<unsigned>(p.auth);
-        Require(auth<=3&&(p.provider==Provider::Subsonic?auth<=1:auth!=1),L"认证方式不适用于此来源类型");
+        Require(static_cast<unsigned>(p.provider)<=2,L"无效来源类型");const auto auth=static_cast<unsigned>(p.auth);
+        Require(auth<=3&&(p.provider==Provider::Subsonic?auth<=1:p.provider==Provider::WebDav?(auth==0||auth==3):auth!=1),L"认证方式不适用于此来源类型");
         for(const auto& old:previous)if(old.id==p.id)Require(old.provider==p.provider,L"更换类型时需生成新的来源标识");
         Require(p.root.size()<4096&&p.root.find_first_of(L"\r\n\\")==p.root.npos,L"目录路径无效");
+        if(p.provider==Provider::WebDav)DavPath(p.root);
         if(!first)json+=',';first=false;json+="{\"id\":"+Quote(p.id)+",\"name\":"+Quote(p.name)+",\"provider\":"+std::to_string(static_cast<unsigned>(p.provider))+",\"url\":"+Quote(p.url)+",\"username\":"+Quote(p.username)+",\"secret\":"+Quote(p.secret)+",\"root\":"+Quote(p.root)+",\"directoryPassword\":"+Quote(p.directory_password)+",\"auth\":"+std::to_string(auth)+",\"proxy\":"+(p.proxy?"true":"false")+"}";
     }json+="]}";DATA_BLOB in{static_cast<DWORD>(json.size()),reinterpret_cast<BYTE*>(json.data())},out{};
     Require(CryptProtectData(&in,L"TTPlayer personal media",nullptr,nullptr,nullptr,CRYPTPROTECT_UI_FORBIDDEN,&out)!=FALSE,L"凭据加密失败",E_FAIL);
@@ -269,7 +283,7 @@ void Library::Save(const std::vector<Profile>& profiles,unsigned active) {
     Require(MoveFileExW(temp.c_str(),file_.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE,L"配置保存失败",STG_E_WRITEFAULT);
     std::lock_guard lock(mutex_);profiles_=profiles;active_profile_=active;sessions_.clear();load_error_.clear();
 }
-Profile NewProfile(Provider provider){Profile p;p.provider=provider;p.id=L"source-"+Salt();p.name=provider==Provider::OpenList?L"OpenList":L"OpenSubsonic";p.url=provider==Provider::OpenList?L"http://127.0.0.1:5244":L"http://127.0.0.1:4533";p.auth=provider==Provider::OpenList?Auth::Guest:Auth::Password;return p;}
+Profile NewProfile(Provider provider){Profile p;p.provider=provider;p.id=L"source-"+Salt();p.name=ProviderName(provider);p.url=provider==Provider::OpenList?L"http://127.0.0.1:5244":provider==Provider::WebDav?L"http://127.0.0.1/dav":L"http://127.0.0.1:4533";p.auth=provider==Provider::OpenList?Auth::Guest:Auth::Password;return p;}
 void Library::SelectProfile(const std::wstring& id){auto profiles=Profiles();auto it=std::find_if(profiles.begin(),profiles.end(),[&](const auto& p){return p.id==id;});Require(it!=profiles.end(),L"媒体来源已不存在，请重新选择");Save(profiles,static_cast<unsigned>(it-profiles.begin()));}
 std::wstring Library::SubsonicUrl(const Profile& p,const wchar_t* method,const std::wstring& args) {
     auto base=NormalizeUrl(p.url);if(!base.ends_with(L"/rest")&&!base.ends_with(L"/@rest"))base+=L"/rest";
@@ -301,12 +315,14 @@ Json Library::OpenList(const Profile& p,const wchar_t* method,const std::string&
     return result["data"];
 }
 void Library::Test(const Profile& p,const Cancel& cancel) {
+    if(p.provider==Provider::WebDav){WebDav(p,{View::Directory,p.root},cancel);return;}
     if(p.provider==Provider::Subsonic)Subsonic(p,L"ping",{},cancel);
     else OpenList(p,L"fs/list","{\"path\":"+Quote(p.root.empty()?L"/":p.root)+",\"password\":"+Quote(p.directory_password)+",\"page\":1,\"per_page\":1,\"refresh\":false}",cancel);
 }
 Page Library::Browse(const Profile& p,const Query& q,const Cancel& cancel) {
     CheckCancel(cancel);Require(q.page<10000,L"页码超出限制");Page page;
     const auto offset=std::to_wstring(q.page*page_size), id=L"&id="+Encode(q.id);
+    if(p.provider==Provider::WebDav)return WebDav(p,q,cancel);
     if(p.provider==Provider::OpenList) {
         const auto path=q.id.empty()?(p.root.empty()?L"/":p.root):q.id;
         const bool search=q.view==View::Search;
@@ -350,12 +366,14 @@ std::vector<Item> Library::Playable(const Profile& profile,const Item& container
     else collect(container.kind==Kind::Album?View::Album:View::Playlist,container.id,append);
     Require(!songs.empty(),L"这里没有可播放的歌曲");return songs;
 }
-std::wstring Library::Resolve(const std::wstring& source,const Cancel& cancel) {
+std::wstring Library::Resolve(const std::wstring& source,const Cancel& cancel) {auto result=ResolveRequest(source,cancel);Require(result.authorization.empty(),L"请更新主程序以播放需要认证的 WebDAV 文件",E_NOINTERFACE);return result.url;}
+ResolvedSource Library::ResolveRequest(const std::wstring& source,const Cancel& cancel) {
     Require(IsSource(source),L"无效媒体来源");const auto rest=source.substr(std::size(prefix)-1);const auto a=rest.find(L'/'),b=rest.find(L'/',a+1),c=rest.find(L'/',b+1);
     Require(a!=rest.npos&&b!=rest.npos&&c!=rest.npos&&c+1<rest.size(),L"无效媒体标识");
     const auto p=Find(Decode(rest.substr(0,a)));const auto item_id=Decode(rest.substr(b+1,c-b-1));const auto action=rest.substr(a+1,b-a-1);
     Require(!item_id.empty()&&(action==L"play"||action==L"download"),L"无效媒体操作");CheckCancel(cancel);
-    if(p.provider==Provider::Subsonic)return SubsonicUrl(p,action==L"download"?L"download":L"stream",L"&id="+Encode(item_id)+(action==L"play"?L"&format=raw":L""));
+    if(p.provider==Provider::Subsonic)return {SubsonicUrl(p,action==L"download"?L"download":L"stream",L"&id="+Encode(item_id)+(action==L"play"?L"&format=raw":L"")),{}};
+    if(p.provider==Provider::WebDav)return {DavUrl(p,item_id,false),DavAuthorization(p)};
     auto data=OpenList(p,L"fs/get","{\"path\":"+Quote(item_id)+",\"password\":"+Quote(p.directory_password)+"}",cancel);
     if(p.proxy) {
         // A user with a restricted base_path receives a root-relative path;
@@ -363,10 +381,10 @@ std::wstring Library::Resolve(const std::wstring& source,const Cancel& cancel) {
         const auto user=OpenList(p,L"me",{},cancel);auto base_path=Field(user,"base_path");
         while(!base_path.empty()&&base_path.back()==L'/')base_path.pop_back();
         auto path=item_id;if(path.empty()||path.front()!=L'/')path=L"/"+path;
-        return NormalizeUrl(p.url)+L"/p"+Encode(base_path+path,true)+L"?sign="+Encode(Field(data,"sign"));
+        return {NormalizeUrl(p.url)+L"/p"+Encode(base_path+path,true)+L"?sign="+Encode(Field(data,"sign")),{}};
     }
     Require(data["header"].fields.empty(),L"此存储要求专用请求头，请启用 OpenList 服务器代理");
-    const auto raw=Field(data,"raw_url");Require(!HttpOrigin(raw).empty(),L"OpenList 未返回可用下载地址");return raw;
+    const auto raw=Field(data,"raw_url");Require(!HttpOrigin(raw).empty(),L"OpenList 未返回可用下载地址");return {raw,{}};
 }
 std::string Library::Cover(const Profile& p,const std::wstring& id,const Cancel& cancel) {
     if(p.provider!=Provider::Subsonic||id.empty())return {};return transport_(SubsonicUrl(p,L"getCoverArt",L"&id="+Encode(id)+L"&size=160"),{}, {},cancel);

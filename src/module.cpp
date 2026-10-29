@@ -137,6 +137,15 @@ HRESULT WINAPI ResolveSource(void* p,const wchar_t* source,BOOL(WINAPI* canceled
         catch(const ttpbrowser::media::Error& e){return e.code;}
     });
 }
+HRESULT WINAPI ResolveSourceEx(void* p,const wchar_t* source,BOOL(WINAPI* canceled)(void*),void* context,BSTR* output,BSTR* authorization) {
+    if(!output||!authorization)return E_POINTER;*output=nullptr;*authorization=nullptr;if(!p||!source)return E_INVALIDARG;
+    return Guard([&]() -> HRESULT {
+        try {const auto request=static_cast<Module*>(p)->library->ResolveRequest(source,[=]{return canceled&&canceled(context);});
+            auto url=SysAllocString(request.url.c_str()),auth=SysAllocString(request.authorization.c_str());
+            if(!url||!auth){SysFreeString(url);SysFreeString(auth);return E_OUTOFMEMORY;}*output=url;*authorization=auth;return S_OK;}
+        catch(const ttpbrowser::media::Error& e){return e.code;}
+    });
+}
 HRESULT WINAPI CreateSettings(void* p,HWND parent,HWND* out) {
     if(!out)return E_POINTER;*out=nullptr;auto* m=Current(p);if(!m||!IsWindow(parent))return E_INVALIDARG;
     return Guard([&]() -> HRESULT {m->settings=std::make_unique<ttpbrowser::MediaSettings>(*m->library,[m]{m->browser->MediaSettingsChanged();});
@@ -144,7 +153,7 @@ HRESULT WINAPI CreateSettings(void* p,HWND parent,HWND* out) {
 }
 HRESULT WINAPI CommitSettings(void* p) {auto* m=Current(p);if(!m)return E_INVALIDARG;return Guard([&]{return m->settings?m->settings->Commit():S_OK;});}
 const ttp_browser_api api={sizeof(ttp_browser_api),TTP_BROWSER_ABI_VERSION,
-    Create,Destroy,Configure,SetSkin,Show,Window,Translate,State,Enqueue,Prefetch,External,ResolveSource,CreateSettings,CommitSettings};
+    Create,Destroy,Configure,SetSkin,Show,Window,Translate,State,Enqueue,Prefetch,External,ResolveSource,CreateSettings,CommitSettings,ResolveSourceEx};
 }
 extern "C" const ttp_browser_api* WINAPI ttp_browser_get_api(uint32_t version) {
     return version==TTP_BROWSER_ABI_VERSION ? &api : nullptr;

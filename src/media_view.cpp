@@ -87,7 +87,7 @@ struct MediaView::Impl {
         if(profiles.empty()){StatusText(L"暂无媒体来源，请从右下角菜单进入设置添加。");SetWindowTextW(controls[Location],L"");EnableWindow(controls[BackButton],FALSE);return;}
         const auto p=profiles[selected];const auto q=query;auto* l=&library;Run(0,[l,p,q](Result& r,const Cancel& c){r.page=l->Browse(p,q,c);});
     }
-    void RootQuery(){history.clear();query={};if(profiles.empty())return;query.view=profiles[selected].provider==Provider::OpenList?View::Directory:View::Albums;query.id=profiles[selected].root;SendMessageW(controls[Category],CB_SETCURSEL,0,0);}
+    void RootQuery(){history.clear();query={};if(profiles.empty())return;query.view=profiles[selected].provider!=Provider::Subsonic?View::Directory:View::Albums;query.id=profiles[selected].root;SendMessageW(controls[Category],CB_SETCURSEL,0,0);}
     void Open(int index) {
         if(index<0||static_cast<size_t>(index)>=page.items.size())return;
         const auto item=page.items[index];if(item.kind==Kind::Song){Submit(Play);return;}
@@ -123,7 +123,7 @@ struct MediaView::Impl {
     void Categories() {
         SendMessageW(controls[Category],CB_RESETCONTENT,0,0);
         for(int id:{Category,Search,SearchText})EnableWindow(controls[id],!profiles.empty());if(profiles.empty())return;
-        if(profiles[selected].provider==Provider::OpenList)SendMessageW(controls[Category],CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"文件夹"));
+        if(profiles[selected].provider!=Provider::Subsonic)SendMessageW(controls[Category],CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"文件夹"));
         else for(const auto s:{L"最新专辑",L"歌手",L"歌单",L"全部歌曲",L"收藏歌曲"})SendMessageW(controls[Category],CB_ADDSTRING,0,reinterpret_cast<LPARAM>(s));
         SendMessageW(controls[Category],CB_SETCURSEL,0,0);
     }
@@ -137,8 +137,8 @@ struct MediaView::Impl {
         if(id>=6100&&id<6164){const auto sources=library.Profiles();if(static_cast<size_t>(id-6100)<sources.size()){library.SelectProfile(sources[id-6100].id);profiles=library.Profiles();selected=library.ActiveProfile();Categories();RootQuery();Browse();}return;}
         if(profiles.empty())return;
         if(id==Play||id==Add||id==Download)Submit(id);
-        else if(id==Category&&notification==CBN_SELCHANGE){history.clear();query={};const View views[]={View::Albums,View::Artists,View::Playlists,View::Songs,View::Starred};const auto index=SendMessageW(controls[Category],CB_GETCURSEL,0,0);query.view=profiles[selected].provider==Provider::OpenList?View::Directory:views[std::clamp<INT_PTR>(index,0,4)];Browse();}
-        else if(id==Search){history.push_back(query);query={View::Search,profiles[selected].provider==Provider::OpenList?profiles[selected].root:L"",Text(controls[SearchText]),0};Browse();}
+        else if(id==Category&&notification==CBN_SELCHANGE){history.clear();query={};const View views[]={View::Albums,View::Artists,View::Playlists,View::Songs,View::Starred};const auto index=SendMessageW(controls[Category],CB_GETCURSEL,0,0);query.view=profiles[selected].provider!=Provider::Subsonic?View::Directory:views[std::clamp<INT_PTR>(index,0,4)];Browse();}
+        else if(id==Search){history.push_back(query);query={View::Search,profiles[selected].provider==Provider::WebDav?query.id:profiles[selected].provider!=Provider::Subsonic?profiles[selected].root:L"",Text(controls[SearchText]),0};Browse();}
         else if(id==BackButton){if(!history.empty()){query=history.back();history.pop_back();Browse();}}
         else if(id==NextPage&&page.more){++query.page;Browse();}
         else if(id==PreviousPage&&query.page){--query.page;Browse();}

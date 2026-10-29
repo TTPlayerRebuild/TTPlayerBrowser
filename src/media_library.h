@@ -13,8 +13,11 @@ using Json = ttplayer::core::Json;
 using Transport = std::function<std::string(const std::wstring&, const std::string&,
                                            const std::wstring&, const Cancel&)>;
 struct Error { HRESULT code; std::wstring message; };
-enum class Provider { Subsonic, OpenList };
+enum class Provider { Subsonic, OpenList, WebDav };
 enum class Auth { Password, ApiKey, Token, Guest };
+struct ResolvedSource { std::wstring url, authorization; };
+using DavTransport = std::function<std::string(const std::wstring&,const std::wstring&,const Cancel&)>;
+std::string WebDavRequest(const std::wstring&,const std::wstring&,const Cancel&);
 struct Profile {
     Provider provider{};
     Auth auth{};
@@ -47,7 +50,7 @@ std::string Request(const std::wstring&, const std::string&, const std::wstring&
 
 class Library final {
 public:
-    explicit Library(std::filesystem::path state_file, Transport transport = Request);
+    explicit Library(std::filesystem::path state_file, Transport transport = Request, DavTransport dav = WebDavRequest);
     std::vector<Profile> Profiles() const;
     unsigned ActiveProfile() const;
     void Save(const std::vector<Profile>&, unsigned active = UINT_MAX);
@@ -57,15 +60,18 @@ public:
     Page Browse(const Profile&, const Query&, const Cancel& = {});
     std::vector<Item> Playable(const Profile&, const Item&, const Cancel& = {});
     std::wstring Resolve(const std::wstring&, const Cancel& = {});
+    ResolvedSource ResolveRequest(const std::wstring&, const Cancel& = {});
     std::string Cover(const Profile&, const std::wstring&, const Cancel& = {});
     std::wstring Lyrics(const Profile&, const Item&, const Cancel& = {});
     const std::wstring& LoadError() const { return load_error_; }
 private:
+    Page WebDav(const Profile&, const Query&, const Cancel&);
     Json Subsonic(const Profile&, const wchar_t*, const std::wstring&, const Cancel&);
     std::wstring SubsonicUrl(const Profile&, const wchar_t*, const std::wstring&);
     Json OpenList(const Profile&, const wchar_t*, const std::string&, const Cancel&);
     std::filesystem::path file_;
     Transport transport_;
+    DavTransport dav_;
     mutable std::mutex mutex_;
     std::vector<Profile> profiles_;
     unsigned active_profile_{};

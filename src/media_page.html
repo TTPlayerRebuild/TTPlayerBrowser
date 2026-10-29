@@ -24,7 +24,7 @@ header{padding:7px 10px 4px;background:#f1f8fb;border-bottom:1px solid var(--lin
 const $=id=>document.getElementById(id), bridge=window.chrome&&window.chrome.webview;
 let serial=0, profiles=[], source=0, query={view:0,path:'',text:'',page:0}, history=[], page={items:[],token:0,more:false}, selected=new Set(), generation=0, detailGeneration=0, loading=false, initialized=false, coverObserver=null, coverQueue=[], coverActive=0;
 const knownPages=new Map();
-function isFiles(){return profiles[source]?.provider===1;}
+function isFiles(){return !!profiles[source]&&profiles[source].provider!==0;}
 const pending=new Map(), categories=[['最新专辑',0],['歌手',1],['歌单',2],['全部歌曲',3],['收藏',4]];
 function rpc(op,fields={}){return new Promise((resolve,reject)=>{if(!bridge)return reject(Error('请在千千音乐窗内打开此页面'));const id=++serial;const timer=setTimeout(()=>{pending.delete(id);reject(Error('请求超时，请重试'));},45000);pending.set(id,{resolve,reject,timer});bridge.postMessage({id,op,...fields});});}
 function clearError(){const e=$('operation-error');if(e)e.remove();}
@@ -71,7 +71,7 @@ async function openMenu(){const menu=$('source-menu');if(!menu.hidden){closeMenu
 $('settings').onclick=openMenu;
 document.addEventListener('click',e=>{if(!$('source-menu').contains(e.target)&&!$('settings').contains(e.target))closeMenu(false);});
 document.addEventListener('keydown',e=>{if($('source-menu').hidden)return;if(e.key==='Escape'){e.preventDefault();closeMenu();}else if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();const buttons=[...$('source-menu').querySelectorAll('button')],n=buttons.indexOf(document.activeElement);buttons[e.key==='Home'?0:e.key==='End'?buttons.length-1:(n+(e.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length].focus();}else if(e.key==='Tab')closeMenu(false);});$('back').onclick=back;$('previous').onclick=()=>{if(query.page){--query.page;load();}};$('next').onclick=()=>{if(page.more){++query.page;load();}};
-$('search-form').onsubmit=e=>{e.preventDefault();const text=$('search-text').value.trim();if(text)setQuery({view:9,path:isFiles()?profiles[source].root:'',text,page:0},true);else changeSource();};
+$('search-form').onsubmit=e=>{e.preventDefault();const text=$('search-text').value.trim();if(text)setQuery({view:9,path:profiles[source].provider===2?query.path:isFiles()?profiles[source].root:'',text,page:0},true);else changeSource();};
 for(const op of ['play','add','download'])$(op).onclick=()=>act(op);$('close-details').onclick=hideDetails;
 if(bridge)bridge.addEventListener('message',e=>{const m=e.data;if(!m||typeof m!=='object')return;if(m.event==='ready')init();else if(m.event==='refresh')load();else if(m.event==='profilesChanged')rpc('profiles').then(p=>{profiles=p;changeSource();}).catch(e=>reportError(e.message));else if(m.event==='back')back();else if(pending.has(m.id)){const p=pending.get(m.id);pending.delete(m.id);clearTimeout(p.timer);m.ok?p.resolve(m.data):p.reject(Error(m.error||'操作失败'));}});else reportError('请在千千音乐窗内打开此页面');
 })();
