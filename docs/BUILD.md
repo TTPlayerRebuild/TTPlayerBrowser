@@ -50,11 +50,10 @@ Release 对组件自身启用 `/O1 /Ob2 /Os /Gy /Gw /GF /GR-`、LTCG、`/OPT:REF
 
 ## 安装包
 
-`build/Release/ttpbrowser-<版本>.zip` 只有以下三个文件：
+`build/Release/ttpbrowser-<版本>.zip` 只有以下二个文件：
 
 ```text
 ttpbrowser.dll
-THIRD_PARTY_NOTICES.md
 SHA256SUMS.txt
 ```
 

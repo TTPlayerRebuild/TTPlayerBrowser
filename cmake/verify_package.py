@@ -7,7 +7,7 @@ import zipfile
 
 
 def verify(path):
-    members = {'ttpbrowser.dll', 'THIRD_PARTY_NOTICES.md'}
+    members = {'ttpbrowser.dll'}
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         if len(names) != 3 or set(names) != members | {'SHA256SUMS.txt'}:

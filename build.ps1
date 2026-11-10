@@ -31,7 +31,7 @@ foreach ($name in @('WebView2-LICENSE.md','WebView2-NOTICE.md','WTL-MS-PL.md','V
     $notices += "## $name`n`n" + [IO.File]::ReadAllText((Join-Path $PSScriptRoot "docs/licenses/$name")) + "`n`n"
 }
 [IO.File]::WriteAllText((Join-Path $stage 'THIRD_PARTY_NOTICES.md'),$notices,(New-Object Text.UTF8Encoding($false)))
-$members = @('ttpbrowser.dll','THIRD_PARTY_NOTICES.md')
+$members = @('ttpbrowser.dll')
 $checksums = foreach ($name in $members) {
     $hash = (Get-FileHash -LiteralPath (Join-Path $stage $name) -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $name"
