@@ -4,22 +4,22 @@
     {
       "path": "src/audio/legacy_cache.cpp",
       "source": "rebuild/src/audio/legacy_cache.cpp",
-      "sha256": "d8cc83a11b1e4e91906b23c0850b8819ec7b0074311e0ef7ca9714055b158377"
+      "sha256": "d1258ea09ad2e64223cd42040211b87ac6ebcdacbac3cbf5511173cbc118beae"
     },
     {
       "path": "src/core/text.cpp",
       "source": "rebuild/src/core/text.cpp",
-      "sha256": "f7d49c17e86778a0a5149aa53d3183f38defc7b8f0ad1333e4799ee2163eada4"
+      "sha256": "55487ab26c1857be5d2fc97dc42981f9f4a2224831be68b9a3d9422a05d291f7"
     },
     {
       "path": "src/skin/skin_package.cpp",
       "source": "rebuild/src/skin/skin_package.cpp",
-      "sha256": "23d9adeba2e5efa3e451291e497ffc0c8fc12b58ba4fc07e6dc5c96b15fa3e91"
+      "sha256": "eec6ec943feb5c328667958bffe58b7b9f5677494715d9b0dad3aa823eeb8139"
     },
     {
       "path": "include/ttplayer/audio/http_download_queue.h",
       "source": "rebuild/include/ttplayer/audio/http_download_queue.h",
-      "sha256": "7eda18ad3fc761eeab65f1acc293c954dce996a8ced621c1e0bb58219c3c5326"
+      "sha256": "f3431ad0526f1a90e684a2165838554c9b6192100a464c24a37b9010b4347dbb"
     },
     {
       "path": "include/ttplayer/core/text.h",
@@ -34,7 +34,7 @@
     {
       "path": "third_party/ttpcomm-sdk/include/ttpcomm/text.h",
       "source": "rebuild/third_party/ttpcomm-sdk/include/ttpcomm/text.h",
-      "sha256": "c1e6ad165e0f5ed0674dad794059b55fc5e8faf777949d9a7005002ff00344b8"
+      "sha256": "ca05eafb243f0c657909965db7569749cd5e257a14c5fcdbd736435e04a290f8"
     },
     {
       "path": "third_party/ttpcomm-sdk/include/ttpcomm/zip.h",
@@ -49,7 +49,7 @@
     {
       "path": "third_party/ttpcomm-sdk/include/ttpcomm_api.h",
       "source": "rebuild/third_party/ttpcomm-sdk/include/ttpcomm_api.h",
-      "sha256": "1e466827eeb39a19d1743c58f286e7d487146b4b5e26c95e630bef5c7e35ec7f"
+      "sha256": "746e88eb187a6908a7dea952b0293cd50ab95df4e75c5d05c94b9bb6fff4ca68"
     },
     {
       "path": "src/app/ttplayer.manifest",

@@ -1,0 +1,2 @@
+# The standalone build checks the SHA-256 of each snapshot file on disk.
+support/rebuild/** text=auto eol=lf
