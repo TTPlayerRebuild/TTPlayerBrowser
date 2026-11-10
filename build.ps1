@@ -24,13 +24,6 @@ $output = Join-Path $BuildDirectory 'Release'
 $stage = Join-Path $BuildDirectory ('package-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
 Invoke-CMake @('--install',$BuildDirectory,'--config','Release','--component','Runtime','--prefix',$stage)
-# The loader is redistributed with its notices. Bundle the fixed dependency
-# notices as distribution materials, separate from source and test evidence.
-$notices = "# Third-party notices`n`n"
-foreach ($name in @('WebView2-LICENSE.md','WebView2-NOTICE.md','WTL-MS-PL.md','VC-LTL-LICENSE.md','YY-Thunks-LICENSE.md')) {
-    $notices += "## $name`n`n" + [IO.File]::ReadAllText((Join-Path $PSScriptRoot "docs/licenses/$name")) + "`n`n"
-}
-[IO.File]::WriteAllText((Join-Path $stage 'THIRD_PARTY_NOTICES.md'),$notices,(New-Object Text.UTF8Encoding($false)))
 $members = @('ttpbrowser.dll')
 $checksums = foreach ($name in $members) {
     $hash = (Get-FileHash -LiteralPath (Join-Path $stage $name) -Algorithm SHA256).Hash.ToLowerInvariant()

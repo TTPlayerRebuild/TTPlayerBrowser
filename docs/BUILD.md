@@ -57,7 +57,7 @@ ttpbrowser.dll
 SHA256SUMS.txt
 ```
 
-将 ttpbrowser.dll 放在播放器 EXE 同一目录，保留第三方声明。外部 `build/Release/SHA256SUMS.txt` 验证 ZIP，包内校验和验证两个载荷文件。`verify_package.py` 还检查成员白名单和DLL 的 x86 架构。
+将 ttpbrowser.dll 放在播放器 EXE 同一目录。第三方声明保存在仓库的 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。外部 `build/Release/SHA256SUMS.txt` 验证 ZIP，包内校验和验证 DLL。`verify_package.py` 还检查成员白名单和 DLL 的 x86 架构。
 
 ## 本地测试
 

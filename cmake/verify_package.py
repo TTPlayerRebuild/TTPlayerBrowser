@@ -10,7 +10,7 @@ def verify(path):
     members = {'ttpbrowser.dll'}
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
-        if len(names) != 3 or set(names) != members | {'SHA256SUMS.txt'}:
+        if len(names) != len(members) + 1 or set(names) != members | {'SHA256SUMS.txt'}:
             raise ValueError('Unexpected package files or installation directory')
         hashes = {}
         for line in archive.read('SHA256SUMS.txt').decode('utf-8-sig').splitlines():
@@ -30,7 +30,7 @@ def verify(path):
                 pe = struct.unpack_from('<I', data, 60)[0]
                 if data[pe:pe+4] != b'PE\0\0' or struct.unpack_from('<H', data, pe+4)[0] != 0x14c:
                     raise ValueError(f'DLL must be x86: {name}')
-    print(f'Runtime ZIP verified: {path.name}, one x86 DLL, notices and SHA-256 checksums')
+    print(f'Runtime ZIP verified: {path.name}, one x86 DLL and SHA-256 checksums')
 
 
 if __name__ == '__main__':

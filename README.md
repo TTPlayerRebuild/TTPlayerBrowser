@@ -24,7 +24,7 @@ WebView2 Loader 已静态合并到组件。个人媒体库默认使用 WebView2�
 
 GitHub Actions 与其它插件保持相同用法：手动运行 **Build TTPlayer music window**，勾选 **Release a Version (GitHub)** 才会发布。版本采用北京时间 `yyyy.MM.dd`，同日后续发行使用 `p1`、`p2`，编译前写入 DLL 的文件和产品版本。
 
-输出 `build/Release/ttpbrowser-<版本>.zip` 与外部 `SHA256SUMS.txt`。ZIP 包含一个 DLL、第三方声明及包内校验和，不包含测试、样本或本地分析产物。Action 默认只构建、审计和打包；测试可在本地显式开启。
+输出 `build/Release/ttpbrowser-<版本>.zip` 与外部 `SHA256SUMS.txt`。ZIP 包含 `ttpbrowser.dll` 和包内校验和。第三方声明保存在本仓库的 `THIRD_PARTY_NOTICES.md`。Action 默认只构建、审计和打包；测试可在本地显式开启。
 
 ## 文档
 
@@ -38,4 +38,4 @@ GitHub Actions 与其它插件保持相同用法：手动运行 **Build TTPlayer
 - [外围绘制与下载界面修复](docs/UI_FIX.zh-CN.md)
 - [音乐窗吸附分析与修复](docs/SNAP_FIX.zh-CN.md)
 - [音乐窗九宫格拉伸修复](docs/NINE_PATCH_FIX.zh-CN.md)
-- [第三方声明](docs/licenses/)
+- [第三方声明](THIRD_PARTY_NOTICES.md)
