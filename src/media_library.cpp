@@ -229,8 +229,8 @@ std::string WebDavRequest(const std::wstring& url,const std::wstring& auth,const
 }
 #include "media_webdav.inl"
 Library::Library(std::filesystem::path state_file,Transport transport,DavTransport dav):file_(state_file.parent_path()/L"MediaLibrary.dat"),transport_(std::move(transport)),dav_(std::move(dav)) {
-    profiles_={{Provider::Subsonic,Auth::Password,L"subsonic",L"OpenSubsonic",L"http://127.0.0.1:4533"},
-               {Provider::OpenList,Auth::Guest,L"openlist",L"OpenList",L"http://127.0.0.1:5244"}};
+    // A fresh installation has no configured services. Load existing sources
+    // unchanged, but do not seed examples or overwrite a failed/absent config.
     if(!std::filesystem::exists(file_))return;
     try {
         Require(std::filesystem::file_size(file_)<=1024*1024,L"配置文件过大");std::ifstream stream(file_,std::ios::binary);

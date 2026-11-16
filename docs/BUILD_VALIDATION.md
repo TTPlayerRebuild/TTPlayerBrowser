@@ -1,5 +1,25 @@
 # 构建与发行验证记录
 
+## 首次使用保持空媒体来源 / 2026-11-16
+
+取消 `Library` 构造时自动加入的 OpenSubsonic、OpenList 本机示例来源。全新配置保持空列表，不主动创建 `MediaLibrary.dat`；手动添加仍支持 OpenSubsonic、OpenList 和 WebDAV。已有来源及旧版配置照常读取，不能根据名称删除用户条目。读取或解密失败时保留错误和原文件，不回退到示例来源。
+
+本机 Windows 11 验证：
+
+- 修改前的新回归重现四项失败：首次为空、重复无配置加载、解密失败不产生来源、无效配置不产生来源。移除预填初始化后全部通过。
+- 七组 CTest 全部通过：媒体协议/配置、原生来源编辑器、DLL 契约、下载、鼠标契约、文件操作和下载鼠标状态。协议及编辑测试改为显式创建自己的隔离来源，不再依赖生产默认值。
+- 新增覆盖首次不写配置、三种类型添加首条来源、删除最后一条并重启、原名称来源的身份/凭据/顺序/选中项保留、旧格式读取及损坏配置不覆盖。原生设置验证首次零行、添加可用、其余操作禁用、添加取消不落盘、首条保存及重启恢复。
+- 独立和主程序集成两种 DLL 均构建成功，通过 XP/Win7 静态导入审计（16 DLL / 381 imports）。本轮未进行新的 XP/Win7、真实媒体服务或 WebView2/IE 页面运行验证。
+- 部署后的实际 DLL 另行运行契约测试，零失败；确认实际 DLL 创建的来源列表为空，未编辑就提交设置不会生成来源配置。
+
+已更新 `rebuild/build/Release/ttpbrowser.dll`，SHA-256：
+`30e8ac3dea6b03463c65a58be587fcacf2f10f48aecf1239f8de9e7d180bae33`。
+旧 DLL 位于本机忽略目录
+`out/first-use-empty-20261116-a39ea4f0ffb648efafe48965ea320fa6/ttpbrowser-before.dll`。
+部署前后 `TTPlayerRebuild.xml`、`TTPlayer.xml`、`HttpDownloads/MediaLibrary.dat`、
+`PersonalLibrary.enabled` 和 `cachelist.xml` 五个文件的 SHA-256 均一致。
+本轮未修改主程序接口、工作流，也未生成新发行包或发布远程 Release。
+
 ## WebDAV / 2026-10-29
 
 新增 WebDAV 来源，支持 Basic/匿名认证、目录浏览、中文路径、当前目录筛选、播放、加入列表和下载。ttp_https 新增 ABI 9 的 PROPFIND/Depth 与认证 Range；组件缺失、旧版或明确要求原生时回退 WinINet。认证通过宿主尾部接口单独传递，不写进播放列表或下载队列。
